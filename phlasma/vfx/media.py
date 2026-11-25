@@ -6,7 +6,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 SR = 44100
-BRAND = os.environ.get("PHLASMA_BRAND", "/mnt/project-files/brand")
+BRAND = os.environ.get("PHLASMA_BRAND", "")  # a folder holding fonts/ (Newsreader, IBM Plex Mono); else PIL default
 _here = os.path.dirname(__file__)
 FONT_FILES = {"serif": "Newsreader-300-opsz21.ttf", "serif_light": "Newsreader-200-opsz21.ttf",
               "mono": "IBMPlexMono-Regular.ttf", "mono_bold": "IBMPlexMono-Bold.ttf"}
