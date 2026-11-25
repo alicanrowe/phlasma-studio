@@ -132,6 +132,12 @@ def drape(job, out, log, **opts):
     np.savez_compressed(os.path.join(out, "garment_state.npz"), X=Xf, uv=uv, tris=tris, piece=pid, pairs=G["pairs"])
     files = {"garment_obj": "garment.obj", "mannequin_obj": "mannequin.obj", "state": "garment_state.npz"}
     if o["render"]:
+        try:
+            import bpy  # noqa: F401
+        except ImportError:
+            log("render_skipped", "warn", reason="bpy not installed (needs Python 3.13); sim outputs are still written")
+            o["render"] = False
+    if o["render"]:
         t = time.time()
         from phlasma.core.render import render_views
         col = _colour(job, o)
