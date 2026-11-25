@@ -19,7 +19,7 @@ phlasma cad schema x.json --out run/       # what the module takes (for an agent
 | brep | JSON feature tree (brep.py) or build123d in Python | furniture parts, machined jewelry, bands, bezels, prongs, stones | STEP, STL, GLB |
 | mesh | SDF scene (sdf.py) meshed by marching cubes | sculpted cast jewelry, organic forms | STL, GLB |
 
-A model is either a Python file with `PARAMS` and `build(p) -> Model` (examples/cad/lap_box.py, gloss_ring.py) or
+A model is either a Python file with `PARAMS` and `build(p) -> Model` (examples/cad/finger_box.py, gloss_ring.py) or
 pure JSON parts (examples/cad/solitaire.job.json). Jewelry blocks: `jewelry.band/bezel_cup/prong_head/brilliant`,
 ring sizes (US -> mm), calibrated stock stones. Flat-pack joinery: `sketch.slot/mortise/tab/fingers/arch/kerf`.
 
@@ -30,12 +30,13 @@ the sheet), stones (stock size, held round the girdle, seated), ring_size (measu
 stands (furniture rests with its centre of mass inside its contacts). tests/test_cad.py plants one mistake per
 check and must catch all of them.
 
-## Prototypes (25 Nov 2026), runs/cad-prototypes/
-- LAP laser joinery box: 12 plates, identical to laser-boxes/scripts/boxes.py to 1e-16 in; all checks pass; one
-  36 x 18 sheet with kerf, blue inner / red outer cuts. 3 s.
-- HELIUM Gloss cocktail ring: same recipe as helium.py, own SDF engine, metal + 4 enamel layers + 6 mm stone, all
-  checks pass. 19 s. The ring-size check caught that the original recipe's cushion seat and shank sit inside the
-  finger: the hole came out 16.05 mm, about one US size small. Fixed here (shank radius + finger hole cut last).
+## Examples (examples/cad/)
+- finger_box.py: a finger-jointed laser box from 1/4 in sheet; 5 plates, one nested sheet with kerf, blue inner /
+  red outer cuts. About 3 s.
+- gloss_ring.py: a sculpted cocktail ring (balloon shank, four puffs, thorns, crater-set 6 mm stone, four cold
+  enamel fields as layer parts, cast hollow). About 20 s. Its ring_size check is what caught a recipe whose cushion
+  seat sat inside the finger hole (about one US size small): cut the finger hole last.
+- solitaire.job.json: a bezel solitaire in pure JSON, no Python.
 
 ## Not in v0 (next)
 MCP tool wrapper (core owns mcp.py), sketch constraints, CNC toolpaths and dogbones, 3D mortise-and-tenon
