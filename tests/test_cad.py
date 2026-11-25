@@ -21,21 +21,14 @@ def t_solitaire_ok():
     assert r["status"] == "ok", r.get("checks")
 
 
-def t_lap_ok_and_one_sheet():
-    r = run({"model": "examples/cad/lap_box.py"}, "build")
+def t_finger_box_ok_and_one_sheet():
+    r = run({"model": "examples/cad/finger_box.py"}, "build")
     assert r["status"] == "ok" and r["metrics"]["nest"]["sheets"] == 1, r
 
 
-def t_lap_parity():
-    p = "/mnt/project-files/laser-boxes/scripts"
-    if not os.path.exists(p):
-        return "skip"
-    sys.path.insert(0, p)
-    import boxes as B
-    from phlasma.cad.model import load as L
-    orig = {x.name: x for x in B.lap(10, 4.5, 3.75, "L")}
-    m = L({"model": "examples/cad/lap_box.py"}, {})
-    assert max(orig[q.name].poly.symmetric_difference(q.poly).area for q in m.parts) < 1e-9
+def t_planted_fingers_clash():
+    r = run({"model": "examples/cad/finger_box.py", "params": {"FIT": -0.05}})   # fingers too fat: overlap
+    assert not r["checks"]["interference"]["pass"], r["checks"]["interference"]
 
 
 def t_planted_stone_clips():
@@ -58,7 +51,7 @@ def t_planted_thin_bar():
 
 
 def t_planted_unknown_param():
-    r = run({"model": "examples/cad/lap_box.py", "params": {"Lenght": 9}})
+    r = run({"model": "examples/cad/finger_box.py", "params": {"Lenght": 9}})
     assert r["status"] == "bad_job"
 
 

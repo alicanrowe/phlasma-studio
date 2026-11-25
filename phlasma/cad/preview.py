@@ -5,7 +5,8 @@ import numpy as np
 
 from .part import color_of
 
-BRAND = "/mnt/project-files/brand"
+# brand fonts folder: $PHLASMA_BRAND, else ./brand next to the package (falls back to the default font)
+BRAND = os.environ.get("PHLASMA_BRAND", os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "brand"))
 ACCENT = "#1D847E"
 
 try:

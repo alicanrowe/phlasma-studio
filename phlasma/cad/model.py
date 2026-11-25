@@ -1,6 +1,6 @@
 """Load a model from a job. Two ways in, same Model out:
 
-1. A Python model file:  {"model": "examples/cad/lap_box.py", "params": {"Li": 10}}
+1. A Python model file:  {"model": "examples/cad/finger_box.py", "params": {"L": 10}}
    The file defines PARAMS (defaults) and build(p) -> Model. Params merge: PARAMS < job params < --set p.X=..
 2. Pure JSON parts:       {"name": "solitaire", "units": "mm", "kind": "jewelry", "parts": [ ... ]}
    Each part: {"name", "material", "role", and one of "tree" (brep feature tree, see brep.py),
