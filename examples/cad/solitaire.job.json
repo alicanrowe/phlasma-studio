@@ -1,0 +1,17 @@
+{
+ "name": "solitaire_bezel",
+ "units": "mm",
+ "kind": "jewelry",
+ "ring_size_us": 7,
+ "ring_axis": [0, 1, 0],
+ "parts": [
+  {"name": "ring", "material": "sterling",
+   "tree": {"op": "cut", "items": [
+     {"op": "union", "items": [
+       {"macro": {"band": {"size_us": 7, "width": 4.0, "thick": 1.7}, "n": [0, 1, 0]}},
+       {"macro": {"bezel": {"D": 6.0, "wall": 0.7, "lip": 0.3}, "at": [0, 0, 13.4]}}]},
+     {"prim": "cylinder", "r": 3.02, "h": 6, "at": [0, 0, 13.35]},
+     {"prim": "cone", "r1": 0.9, "r2": 2.2, "h": 3.5, "at": [0, 0, 9.7]}]}},
+  {"name": "stone", "material": "pinktourmaline", "macro": {"stone": {"D": 6.0, "kind": "pinktourmaline"}, "at": [0, 0, 13.4], "n": [0, 0, 1]}}
+ ]
+}

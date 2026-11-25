@@ -1,0 +1,6 @@
+{"graph":"pulse.json","write":"pulse.json","edits":[
+ {"set":"mixd.mode","value":"max"},
+ {"set":"mixd.mix","value":1},
+ {"set":"fade.gain","value":"0.9 - hi.v * 0.04"},
+ {"set":"tint.c3","value":"#bff5ec"}
+]}

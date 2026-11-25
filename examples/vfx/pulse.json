@@ -1,0 +1,156 @@
+{
+ "phlasma_vfx": 1,
+ "note": "Audio-reactive feedback bloom: kick drives a ring and a zoom punch, highs drive grain, feedback leaves trails.",
+ "res": [
+  960,
+  540
+ ],
+ "fps": 30,
+ "duration": 8,
+ "nodes": {
+  "aud": {
+   "op": "audio",
+   "params": {
+    "file": "beat.wav"
+   }
+  },
+  "kick": {
+   "op": "envelope",
+   "params": {
+    "in": "aud.low",
+    "threshold": 0.6,
+    "attack": 0.01,
+    "decay": 0.25
+   }
+  },
+  "hi": {
+   "op": "lag",
+   "params": {
+    "in": "aud.high",
+    "up": 0.02,
+    "down": 0.15
+   }
+  },
+  "clock": {
+   "op": "speed",
+   "params": {
+    "rate": "0.2 + kick.v * 1.5"
+   }
+  },
+  "field": {
+   "op": "noise",
+   "params": {
+    "scale": 2.2,
+    "speed": 0.0,
+    "offset": [
+     0,
+     0,
+     "clock.v"
+    ],
+    "octaves": 5,
+    "amp": 0.9
+   }
+  },
+  "tint": {
+   "op": "colormap",
+   "inputs": [
+    "field"
+   ],
+   "params": {
+    "c0": "#000000",
+    "c1": "#0b3b38",
+    "c2": "#1D847E",
+    "c3": "#bff5ec",
+    "stops": 4
+   }
+  },
+  "ring": {
+   "op": "shape",
+   "params": {
+    "kind": "ring",
+    "size": [
+     "0.12 + kick.v * 0.18",
+     0
+    ],
+    "width": "0.004 + kick.v * 0.02",
+    "soft": 0.004,
+    "color": [
+     1,
+     1,
+     1,
+     1
+    ]
+   }
+  },
+  "seed": {
+   "op": "composite",
+   "inputs": [
+    "ring",
+    "tint"
+   ],
+   "params": {
+    "mode": "add",
+    "mix": 1
+   }
+  },
+  "fb": {
+   "op": "feedback",
+   "params": {
+    "source": "out"
+   }
+  },
+  "warp": {
+   "op": "transform",
+   "inputs": [
+    "fb"
+   ],
+   "params": {
+    "scale": [
+     "1.006 + kick.v * 0.03",
+     "1.006 + kick.v * 0.03"
+    ],
+    "rotate": "0.15 + aud.mid * 0.6",
+    "extend": "zero"
+   }
+  },
+  "fade": {
+   "op": "level",
+   "inputs": [
+    "warp"
+   ],
+   "params": {
+    "gain": "0.9 - hi.v * 0.04"
+   }
+  },
+  "soft": {
+   "op": "blur",
+   "inputs": [
+    "fade"
+   ],
+   "params": {
+    "size": 1.5
+   }
+  },
+  "mixd": {
+   "op": "composite",
+   "inputs": [
+    "seed",
+    "soft"
+   ],
+   "params": {
+    "mode": "max",
+    "mix": 1
+   }
+  },
+  "out": {
+   "op": "chroma",
+   "inputs": [
+    "mixd"
+   ],
+   "params": {
+    "amount": "0.001 + hi.v * 0.006"
+   }
+  }
+ },
+ "output": "out"
+}

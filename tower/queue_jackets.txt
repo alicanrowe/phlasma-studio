@@ -1,0 +1,10 @@
+garment drape jobs/01-clinker-jacket.json --out out/01-clinker-jacket
+garment drape jobs/02-tuck-coat.json --out out/02-tuck-coat
+garment drape jobs/03-warp-blouson.json --out out/03-warp-blouson
+garment drape jobs/04-furrow-coat.json --out out/04-furrow-coat
+garment drape jobs/05-gore-jacket.json --out out/05-gore-jacket
+garment drape jobs/06-husk-shirt-jacket.json --out out/06-husk-shirt-jacket
+garment drape jobs/07-fret-jacket.json --out out/07-fret-jacket
+garment drape jobs/08-tether-overshirt.json --out out/08-tether-overshirt
+garment drape jobs/09-bellows-work-jacket.json --out out/09-bellows-work-jacket
+garment drape jobs/10-auger-jacket.json --out out/10-auger-jacket

@@ -1,0 +1,1 @@
+{"model": "examples/cad/lap_box.py", "params": {"tag": "L"}, "export": ["step", "stl", "glb", "dxf", "preview"]}
