@@ -37,6 +37,7 @@ def job_hash(job):
 def run_verb(module, verb, fn, job_src, out, **opts):
     """fn(job, out_dir, log, **opts) -> dict(outputs=..., checks=..., metrics=...)."""
     job = load_job(job_src)
+    out = os.path.abspath(out)  # Blender resolves relative paths against its own root, not the cwd
     os.makedirs(out, exist_ok=True)
     log = RunLog(os.path.join(out, "log.jsonl"), echo=opts.pop("echo", True))
     run = {"module": module, "verb": verb, "job_hash": job_hash(job), "host": platform.node(),
