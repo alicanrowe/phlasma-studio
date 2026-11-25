@@ -64,6 +64,29 @@ def seam_lines(X, pairs, seam_report, lift=0.0016):
     return lines
 
 
+def glue_pairs(G, X, pid, log, every=3, reach=0.07):
+    """Pieces with no seam (patches such as elbow cups) or on an under-layer are stitched flat to the nearest piece
+    they sit on, so they ride the garment instead of falling off."""
+    from scipy.spatial import cKDTree
+    seamed = set()
+    for s in G["seam_report"]:
+        seamed.update([s["a"], s["b"]])
+    out = []
+    for i, M in enumerate(G["meshes"]):
+        lay = int(M["piece"].spec.get("layer", 0) or 0)
+        if M["name"] in seamed and lay == 0:
+            continue
+        own = np.nonzero(pid == i)[0]
+        other = np.nonzero(pid != i)[0]
+        tree = cKDTree(X[other])
+        idx = own[::every]
+        d, j = tree.query(X[idx])
+        ok = d < reach
+        out += list(zip(idx[ok], other[j[ok]]))
+        log("glue", piece=M["name"], layer=lay, pairs=int(ok.sum()))
+    return np.array(out, int).reshape(-1, 2)
+
+
 def drape(job, out, log, **opts):
     """Sew and drape a 2D pattern job on the mannequin; outputs garment.obj, stills and seam/penetration/stretch checks."""
     o = {**DEFAULTS, **(job.get("sim") or {}), **opts}
@@ -87,7 +110,8 @@ def drape(job, out, log, **opts):
     uv = np.vstack([M["uv"] for M in G["meshes"]])
     tris = np.vstack([M["tris"] + M["offset"] for M in G["meshes"]])
     pid = np.concatenate([np.full(len(M["uv"]), i) for i, M in enumerate(G["meshes"])])
-    cl = Cloth(X, uv, tris, pid, G["pairs"], bV, bF, density=o["density"], device=dev, log=log)
+    glue = glue_pairs(G, X, pid, log)
+    cl = Cloth(X, uv, tris, pid, G["pairs"], bV, bF, density=o["density"], device=dev, log=log, glue=glue)
     T["setup"] = time.time() - t
     t = time.time()
     dt = o["dt"]
@@ -141,7 +165,20 @@ def drape(job, out, log, **opts):
         t = time.time()
         from phlasma.core.render import render_views
         col = _colour(job, o)
-        WV, WF = weld(Xf, tris, G["pairs"])
+        Xr = Xf.copy()
+        if len(glue):  # stitched-on patches sit 1.5 mm proud, under-layers 1.5 mm in, so the two hides never z-fight
+            from scipy.spatial import cKDTree
+            btree = cKDTree(bVp)
+            for i, M in enumerate(G["meshes"]):
+                if not np.isin(i, pid[glue[:, 0]]):
+                    continue
+                lay = int(M["piece"].spec.get("layer", 0) or 0)
+                v = np.nonzero(pid == i)[0]
+                cp = bVp[btree.query(Xr[v])[1]]
+                nrm = Xr[v] - cp
+                nrm /= np.maximum(np.linalg.norm(nrm, axis=1, keepdims=True), 1e-9)
+                Xr[v] += nrm * (0.0015 if lay >= 0 else -0.0015)
+        WV, WF = weld(Xr, tris, G["pairs"])
         items = [{"name": "mannequin", "V": bVp, "F": bF, "mat": "mannequin", "frame": False},
                  {"name": "garment", "V": WV, "F": WF, "mat": "leather", "color": col, "thick": 0.0013,
                   "subsurf": 1}]
