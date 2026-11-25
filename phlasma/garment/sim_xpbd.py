@@ -70,6 +70,8 @@ def k_dist_gs(x: wp.array(dtype=wp.vec3), w: wp.array(dtype=float), e: wp.array(
     if c == 2:
         alpha = a_m
         r = r * seam_scale
+    if c == 3:
+        alpha = a_m
     C = L - r
     if c == 0 and C < 0.0:
         alpha = a_c  # leather buckles easily but barely stretches
@@ -154,7 +156,8 @@ def k_vel(x: wp.array(dtype=wp.vec3), xp: wp.array(dtype=wp.vec3), v: wp.array(d
 
 
 class Cloth:
-    def __init__(self, X, uv, tris, piece_id, pairs, body_V, body_F, density=0.9, device=None, log=print):
+    def __init__(self, X, uv, tris, piece_id, pairs, body_V, body_F, density=0.9, device=None, log=print, glue=None,
+                 glue_gap=0.0045):
         """X (n,3) start positions [m]; uv (n,2) rest pattern coords [m]; tris (m,3); pairs (k,2) seam vertex pairs.
         density kg/m^2 (1.3 mm steerhide ~ 0.9)."""
         self.dev = wp.get_device(device)
@@ -218,9 +221,11 @@ class Cloth:
         self.rest_s, self.tris, self.uv_np = rest_s, tris, uv
         # one constraint list (stretch 0, bend 1, seam 2), greedy-coloured so each colour runs in parallel as true
         # Gauss-Seidel (no two constraints in a colour share a particle)
-        C = np.vstack([Eu, B, pairs.reshape(-1, 2)]).astype(np.int64)
-        kind = np.r_[np.zeros(len(Eu)), np.ones(len(B)), np.full(len(pairs), 2)].astype(np.int32)
-        rest = np.r_[rest_s, rest_b, seam0].astype(np.float32)
+        # glue (stitched-on patches, under-layers): held at one layer's gap, so the two hides don't fight collision
+        glue = np.zeros((0, 2), int) if glue is None or len(glue) == 0 else np.asarray(glue, int)
+        C = np.vstack([Eu, B, pairs.reshape(-1, 2), glue]).astype(np.int64)
+        kind = np.r_[np.zeros(len(Eu)), np.ones(len(B)), np.full(len(pairs), 2), np.full(len(glue), 3)].astype(np.int32)
+        rest = np.r_[rest_s, rest_b, seam0, np.full(len(glue), glue_gap)].astype(np.float32)
         col = _greedy_colour(C, n)
         order = np.lexsort((kind, col))
         C, kind, rest, col = C[order], kind[order], rest[order], col[order]
