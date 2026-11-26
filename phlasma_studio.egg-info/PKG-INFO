@@ -1,0 +1,27 @@
+Metadata-Version: 2.4
+Name: phlasma-studio
+Version: 0.1.0
+Summary: Agent-first garment, VFX and CAD suite (clean-room, open-source stack)
+Requires-Python: >=3.11
+License-File: LICENSE
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: warp-lang>=1.10
+Requires-Dist: triangle
+Requires-Dist: trimesh
+Requires-Dist: scikit-image
+Requires-Dist: shapely
+Requires-Dist: pillow
+Requires-Dist: jsonschema
+Provides-Extra: render
+Requires-Dist: bpy; extra == "render"
+Provides-Extra: vfx
+Requires-Dist: wgpu; extra == "vfx"
+Provides-Extra: cad
+Requires-Dist: build123d; extra == "cad"
+Requires-Dist: manifold3d; extra == "cad"
+Requires-Dist: ezdxf; extra == "cad"
+Requires-Dist: numba; extra == "cad"
+Requires-Dist: fast-simplification; extra == "cad"
+Requires-Dist: rtree; extra == "cad"
+Dynamic: license-file

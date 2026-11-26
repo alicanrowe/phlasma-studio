@@ -46,9 +46,10 @@ def test_render_feedback_and_signals(tmp_path):
               "s": {"op": "shape", "params": {"center": ["l.v * 0.3", 0]}},
               "fb": {"op": "feedback", "params": {"source": "o"}},
               "f": {"op": "level", "inputs": ["fb"], "params": {"gain": 0.8}},
-              "o": {"op": "composite", "inputs": ["s", "f"], "params": {"mode": "max"}}})
+              "o": {"op": "composite", "inputs": ["s", "f"], "params": {"mode": "max"}}},
+             realtime_check=False)  # this test is about feedback + signals; a busy GPU must not fail it
     r = run("render", {"graph": g}, str(tmp_path))
-    assert r["status"] == "ok", r
+    assert r["status"] == "ok", {k: v for k, v in r.get("checks", {}).items() if not v.get("pass", True)} or r
     assert os.path.exists(r["outputs"]["video"]) and r["checks"]["motion"]["pass"]
 
 

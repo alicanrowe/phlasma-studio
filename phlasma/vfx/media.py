@@ -4,7 +4,21 @@ import json, os, shutil, subprocess
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
+
+
+def _find_ffmpeg():
+    """System ffmpeg if on PATH, else the binary bundled with imageio-ffmpeg (Windows services/tasks often lack PATH)."""
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return "ffmpeg"
+
+
+FFMPEG = _find_ffmpeg()
 SR = 44100
 BRAND = os.environ.get("PHLASMA_BRAND", "")  # a folder holding fonts/ (Newsreader, IBM Plex Mono); else PIL default
 _here = os.path.dirname(__file__)

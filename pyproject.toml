@@ -3,11 +3,11 @@ name = "phlasma-studio"
 version = "0.1.0"
 description = "Agent-first garment, VFX and CAD suite (clean-room, open-source stack)"
 requires-python = ">=3.11"
-dependencies = ["numpy", "scipy", "warp-lang>=1.10", "triangle", "trimesh", "scikit-image", "shapely", "pillow", "jsonschema"]
+dependencies = ["numpy", "scipy", "warp-lang>=1.10", "triangle", "trimesh", "scikit-image", "shapely", "pillow", "jsonschema", "imageio-ffmpeg"]
 
 [project.optional-dependencies]
 render = ["bpy"]
-vfx = ["wgpu"]
+vfx = ["wgpu", "imageio-ffmpeg"]
 live = ["glfw", "rendercanvas", "sounddevice", "mido"]
 midi = ["python-rtmidi"]  # hardware MIDI ports; no Windows wheel for Python 3.13, so optional
 cad = ["build123d", "manifold3d", "ezdxf", "numba", "fast-simplification", "rtree"]
