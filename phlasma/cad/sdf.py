@@ -30,7 +30,8 @@ def perp(n):
 
 def frame_from(xaxis, zhint):
     z = nz(zhint) if zhint is not None else np.array([0, 0, 1.0])
-    x = np.asarray(xaxis, float) if xaxis is not None else perp(z)
+    # default local x = world x (world y when z is along x), so an unrotated ellipsoid's radii read as (x, y, z)
+    x = np.asarray(xaxis, float) if xaxis is not None else (np.array([1.0, 0, 0]) if abs(z[0]) < 0.9 else np.array([0, 1.0, 0]))
     x = x - z * np.dot(x, z)
     if np.linalg.norm(x) < 1e-9:
         x = perp(z)
@@ -171,6 +172,33 @@ class Scene:
         rm = r.max()
         return self._add("stroke", (P, r), P.min(0) - rm, P.max(0) + rm, op, k)
 
+    def grid_sdf(self, D, lo, pitch, op=0, k=0.0):
+        """a sampled distance grid (an imported or generated sculpt) as a primitive, trilinear"""
+        D = np.asarray(D, np.float32)
+        lo = np.asarray(lo, float)
+        hi = lo + pitch * (np.array(D.shape) - 1)
+        return self._add("grid", (D, lo, float(pitch)), lo, hi, op, k)
+
+    def group(self, sub, warps=(), op=0, k=0.0, pad=None):
+        """evaluate a sub-scene at warped points. warps, applied in order to the query point:
+        ("twist", {"axis": "z", "rate": deg_per_unit, "c": [x, y, z]}), ("bend", {"axis": "x", "up": "z", "radius": R}),
+        ("taper", {"axis": "z", "rate": per_unit, "c": [...]}), ("mirror", {"axis": "x"}). Distances after a warp are
+        not exact (fine for meshing; keep blend radii modest)."""
+        lo, hi = sub.bounds(pad=0.0)
+        ext = float(np.max(hi - lo))
+        pad = ext * 0.6 if pad is None else pad
+        return self._add("group", (sub, list(warps)), lo - pad, hi + pad, op, k)
+
+    def displace(self, kind="noise", amp=0.2, scale=2.0, octaves=3, seed=0, axis=(0, 0, 1), period=1.0, wobble=0.0,
+                 lo=None, hi=None):
+        """surface relief on everything added so far: d += amp * field(P).
+        kind "noise": fractal value noise of feature size `scale`; "bands": growth bands across `axis` every
+        `period`, wobbled by noise of size `scale` and strength `wobble` (0..1), never even ribs when wobble > 0."""
+        if lo is None:
+            lo, hi = self.bounds(pad=abs(amp) + 0.5)
+        return self._add("disp", dict(kind=kind, amp=amp, scale=scale, octaves=octaves, seed=seed,
+                                      axis=nz(axis), period=period, wobble=wobble), lo, hi, 3, 0.0)
+
     def halfspace(self, p, n, op=2, k=0.0, extent=200.0):
         p, n = np.asarray(p, float), nz(n)
         return self._add("half", (p, n), p - extent, p + extent, op, k)
@@ -191,6 +219,20 @@ class Scene:
             return d_capped_cone(P, *a)
         if kd == "box":
             return d_box(P, *a)
+        if kd == "grid":
+            from scipy.ndimage import map_coordinates
+            D, lo, pitch = a
+            idx = ((P - lo) / pitch).T
+            inside = np.all((idx >= 0) & (idx <= (np.array(D.shape)[:, None] - 1)), 0)
+            out = np.full(len(P), BIG)
+            if inside.any():
+                out[inside] = map_coordinates(D, idx[:, inside], order=1, mode="nearest")
+            return out
+        if kd == "group":
+            sub, warps = a
+            return sub.eval_pts(warp_points(P, warps))
+        if kd == "disp":
+            return field(P, a)
         if kd == "half":
             return (P - a[0]) @ a[1]
         if kd == "stroke":
@@ -207,6 +249,8 @@ class Scene:
 
     @staticmethod
     def combine(d, p, op, k):
+        if op == 3:
+            return d + p
         if op == 0:
             return smin(d, p, k)
         if op == 1:
@@ -217,7 +261,13 @@ class Scene:
         P = np.asarray(P, float)
         d = np.full(len(P), BIG)
         for row in self.rows:
-            d = self.combine(d, self.eval_row(row, P), row["op"], row["k"])
+            if row["op"] == 2 or row["kind"] == "half":
+                d = self.combine(d, self.eval_row(row, P), row["op"], row["k"])
+                continue
+            m = row["k"] + 1e-6
+            sel = np.all((P >= row["lo"] - m) & (P <= row["hi"] + m), 1)
+            if sel.any():
+                d[sel] = self.combine(d[sel], self.eval_row(row, P[sel]), row["op"], row["k"])
         return d
 
     def bounds(self, pad=1.0):
@@ -264,15 +314,124 @@ class Scene:
         D, lo = self.grid(voxel, lo, hi, log)
         if D.min() > 0:
             raise ValueError("scene is empty")
+        D[np.abs(D) < 1e-5] = 1e-5            # a grid node exactly on the surface makes coincident vertices
         v, f, _, _ = marching_cubes(D, 0.0, spacing=(voxel,) * 3)
         m = trimesh.Trimesh(v + lo, f[:, ::-1], process=True)
         m.merge_vertices()
+        m.update_faces(m.nondegenerate_faces())
+        m.remove_unreferenced_vertices()
         if m.volume < 0:
             m.invert()
         if keep == "largest":
             parts = m.split(only_watertight=False)
             m = max(parts, key=lambda x: abs(x.volume))
         return m
+
+
+# ------------------------------------------------------------------ warps and relief fields
+_AX = {"x": 0, "y": 1, "z": 2}
+
+
+def warp_points(P, warps):
+    Q = np.array(P, float)
+    for kind, w in warps:
+        if kind == "mirror":
+            i = _AX[w.get("axis", "x")]
+            Q[:, i] = np.abs(Q[:, i] - w.get("at", 0.0)) + w.get("at", 0.0)
+            continue
+        c = np.asarray(w.get("c", (0, 0, 0)), float)
+        Q = Q - c
+        a = _AX[w.get("axis", "z")]
+        u, v = [i for i in range(3) if i != a]
+        if kind == "twist":
+            t = np.radians(w["rate"]) * Q[:, a]
+            cu, sv = np.cos(t), np.sin(t)
+            Q[:, u], Q[:, v] = cu * Q[:, u] + sv * Q[:, v], -sv * Q[:, u] + cu * Q[:, v]
+        elif kind == "taper":
+            sc = 1.0 + w["rate"] * Q[:, a]
+            sc = np.maximum(sc, 0.05)
+            Q[:, u] /= sc; Q[:, v] /= sc
+        elif kind == "bend":
+            # bend the along-axis line into an arc of radius R curving toward +up
+            R = float(w["radius"]); up = _AX[w.get("up", "z")]
+            x, y = Q[:, a], Q[:, up]
+            rr = np.hypot(x, R - y)
+            th = np.arctan2(x, R - y)
+            Q[:, a], Q[:, up] = R * th, R - rr
+        Q = Q + c
+    return Q
+
+
+def _hash3(i, j, k, seed):
+    h = (i * 73856093) ^ (j * 19349663) ^ (k * 83492791) ^ (seed * 2654435761)
+    h = (h ^ (h >> 13)) * 1274126177
+    return ((h ^ (h >> 16)) & 0xFFFFFF) / float(0xFFFFFF) * 2 - 1
+
+
+def value_noise(P, scale, seed=0):
+    Q = np.asarray(P, float) / scale
+    i0 = np.floor(Q).astype(np.int64)
+    f = Q - i0
+    f = f * f * (3 - 2 * f)
+    out = 0.0
+    for dx in (0, 1):
+        for dy in (0, 1):
+            for dz in (0, 1):
+                w = (f[:, 0] if dx else 1 - f[:, 0]) * (f[:, 1] if dy else 1 - f[:, 1]) * (f[:, 2] if dz else 1 - f[:, 2])
+                out = out + w * _hash3(i0[:, 0] + dx, i0[:, 1] + dy, i0[:, 2] + dz, seed)
+    return out
+
+
+def fbm(P, scale, octaves=3, seed=0):
+    out, amp, tot = 0.0, 1.0, 0.0
+    for o in range(octaves):
+        out = out + amp * value_noise(P, scale / 2 ** o, seed + o)
+        tot += amp; amp *= 0.5
+    return out / tot
+
+
+def field(P, a):
+    if a["kind"] == "noise":
+        return a["amp"] * fbm(P, a["scale"], a["octaves"], a["seed"])
+    if a["kind"] == "bands":
+        t = P @ a["axis"]
+        if a["wobble"]:
+            t = t + a["wobble"] * a["period"] * fbm(P, a["scale"], 2, a["seed"])
+        return a["amp"] * (0.5 - 0.5 * np.cos(2 * np.pi * t / a["period"])) ** 2
+    raise ValueError(a["kind"])
+
+
+def mesh_to_sdf(mesh, pitch, pad=3):
+    """sampled signed distance of a (possibly leaky) mesh: voxelize, fill the inside, distance transform both ways.
+    Closes pinholes and gaps under ~2 voxels, so a messy scan or AI mesh comes out as one watertight solid."""
+    from scipy.ndimage import distance_transform_edt, binary_fill_holes, binary_closing
+    vg = mesh.voxelized(pitch)
+    occ = vg.matrix
+    occ = np.pad(occ, pad)
+    occ = binary_closing(occ, iterations=1)
+    occ = binary_fill_holes(occ)
+    lo = vg.translation - pad * pitch           # centre of voxel [0,0,0]
+    din = distance_transform_edt(occ)
+    dout = distance_transform_edt(~occ)
+    D = ((dout - din) * pitch - 0.0).astype(np.float32)
+    D[occ] += 0.5 * pitch                        # put the zero level on voxel boundaries
+    D[~occ] -= 0.5 * pitch
+    # near the surface, replace the voxel-staircase distance by the true distance to the mesh surface (sampled
+    # densely, nearest point), keeping the inside/outside sign from the filled voxels
+    from scipy.spatial import cKDTree
+    band = np.abs(D) < 3 * pitch
+    idx = np.argwhere(band)
+    if len(idx):
+        n = int(min(4e6, max(2e5, mesh.area / (pitch * pitch) * 8)))
+        pts, fi = mesh.sample(n, return_index=True)
+        nrm = mesh.face_normals[fi]
+        tree = cKDTree(pts)
+        q = np.asarray(lo, float) + idx * pitch
+        dist, j = tree.query(q, k=4, workers=-1)
+        # sign from the nearest samples' normals (voxel occupancy is a voxel too fat at the surface)
+        side = np.einsum("ijk,ijk->ij", q[:, None, :] - pts[j], nrm[j]).sum(1)
+        D[tuple(idx.T)] = np.where(side < 0, -dist[:, 0], dist[:, 0]).astype(np.float32)
+    return D, np.asarray(lo, float), pitch
 
 
 # ------------------------------------------------------------------ helpers used by jewelry pieces

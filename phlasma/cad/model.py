@@ -4,7 +4,8 @@
    The file defines PARAMS (defaults) and build(p) -> Model. Params merge: PARAMS < job params < --set p.X=..
 2. Pure JSON parts:       {"name": "solitaire", "units": "mm", "kind": "jewelry", "parts": [ ... ]}
    Each part: {"name", "material", "role", and one of "tree" (brep feature tree, see brep.py),
-   "macro" (jewelry block, below), "outline"+"thick"+"frame" (a plate)}.
+   "macro" (jewelry block, below), "outline"+"thick"+"frame" (a plate), "sculpt" (SDF brushes, sculpt.py),
+   "nail" (press-on nail base, nails.py; may also carry "sculpt" brushes built on top of it)}.
    macros: {"band": {size_us, width, thick, comfort}}, {"bezel": {D, wall, lip}}, {"prongs": {D, n, wire}},
            {"stone": {D, cut, kind}}; any macro takes "at" [x,y,z] and "n" [axis] to place it.
 """
@@ -84,13 +85,30 @@ def from_json(job):
                 meta["stone"] = jewelry.stone_meta(a["D"], at, n, a.get("cut", "round"), a.get("kind", mat))
             refs[name] = s
             m.solid(name, s, mat, role, **meta)
+        elif "sculpt" in ps or "nail" in ps:
+            from .sculpt import build_scene
+            sc = ps.get("sculpt", {})
+            try:
+                scene = None
+                if "nail" in ps:               # parametric base first; brushes then build on (and blend into) it
+                    from .nails import nail_scene
+                    scene, meta["nail"] = nail_scene(ps["nail"])
+                    sc.setdefault("voxel", ps["nail"].get("pitch", 0.06))
+                scene = build_scene(sc.get("ops", []), job.get("_job_dir"), s=scene)
+                if "nail" in ps and sc.get("ops"):
+                    from .nails import fit_cut
+                    fit_cut(ps["nail"], scene)
+                mesh = scene.mesh(voxel=sc.get("voxel", 0.15), keep=sc.get("keep", "largest"))
+            except (ValueError, KeyError, FileNotFoundError) as e:
+                raise ModelError(f"part {name}: {'nail' if 'nail' in ps else 'sculpt'}: {e}")
+            m.mesh(name, mesh, mat or ("resin" if "nail" in ps else ""), role, **meta)
         elif "outline" in ps:
             from shapely.geometry import Polygon
             pg = Polygon(ps["outline"], ps.get("holes", [])).buffer(0)
             f = ps.get("frame", {"u": [1, 0, 0], "v": [0, 1, 0], "w": [0, 0, 1], "origin": [0, 0, 0]})
             m.plate(name, pg, frame(f["u"], f["v"], f["w"], f["origin"]), ps["thick"], mat or "walnut", **meta)
         else:
-            raise ModelError(f"part {name} needs tree, macro or outline")
+            raise ModelError(f"part {name} needs tree, macro, outline, sculpt or nail")
     return m
 
 

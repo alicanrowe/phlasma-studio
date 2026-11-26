@@ -91,6 +91,76 @@ def t_dogbone_relieves_corners():
     assert len(d.interiors) == 1 and d.area < g.area     # reliefs join the hole, never float as islands
 
 
+# ---------------------------------------------------------------- sculpting (own image-to-3D, nails, remesh)
+def _imgs():
+    """synthetic concept images: a disc and a tall rectangle on a light backdrop"""
+    import numpy as np
+    from PIL import Image
+    d = tempfile.mkdtemp()
+    yy, xx = np.mgrid[:300, :300]
+    for name, m in (("front", (xx - 150) ** 2 + (yy - 150) ** 2 < 110 ** 2),
+                    ("side", (abs(xx - 150) < 75) & (abs(yy - 150) < 110))):
+        im = np.full((300, 300, 3), 240, np.uint8); im[m] = (70, 60, 60)
+        Image.fromarray(im).save(os.path.join(d, name + ".png"))
+    return d
+
+
+def t_hull_matches_true_volume():
+    import math
+    from phlasma.cad.sculpt import build_scene
+    d = _imgs()
+    m = build_scene([{"hull": {"front": "front.png", "side": "side.png", "width": 20, "pitch": 0.25}}], d).mesh(0.25)
+    want = math.pi * 10 ** 2 * (20 * 150 / 220)          # disc r 10 extruded the side's depth (150 px of 220 px tall)
+    assert m.is_watertight and abs(m.volume / want - 1) < 0.03, (m.volume, want)
+    assert abs(m.bounds[0][2]) < 0.2, m.bounds              # base on z = 0
+
+
+def t_inflate_is_round_and_true_size():
+    from phlasma.cad.sculpt import build_scene
+    d = _imgs()
+    m = build_scene([{"inflate": {"image": "front.png", "width": 20, "depth": 6, "pitch": 0.2}}], d).mesh(0.2)
+    ext = m.bounds[1] - m.bounds[0]
+    assert m.is_watertight and abs(ext[0] - 20) < 0.5 and abs(ext[1] - 6) < 0.3, ext
+
+
+def t_nail_set_fits():
+    r = run({"model": "examples/cad/nail_set.py", "params": {"pitch": 0.09, "shape": "square"}})
+    assert r["checks"]["nails"]["pass"] and len(r["checks"]["nails"]["parts"]) == 10, r["checks"]["nails"]
+
+
+def t_planted_nail_too_thick():
+    r = run({"name": "n", "parts": [{"name": "n", "nail": {"size": 5, "shape": "oval", "thick": 1.8, "pitch": 0.09}}]})
+    assert not r["checks"]["nails"]["pass"], r["checks"]["nails"]
+
+
+def t_planted_nail_bad_shape():
+    r = run({"name": "n", "parts": [{"name": "n", "nail": {"size": 5, "shape": "heart"}}]})
+    assert r["status"] != "ok" and "shape" in json.dumps(r), r.get("error")
+
+
+def t_nail_brushes_stay_off_the_finger():
+    import numpy as np, trimesh
+    from phlasma.cad.nails import under_z, outline, DEFAULTS
+    nail = {"size": 6, "shape": "almond", "ext": 5, "pitch": 0.09}
+    j = {"name": "n", "parts": [{"name": "n", "nail": nail, "sculpt": {"ops": [{"ball": {"c": [0, 6, 0], "r": 2.0}}]}}]}
+    r = run(j, "build")
+    m = trimesh.load(r["outputs"]["stl"][0])
+    p = {**DEFAULTS, **nail}; pg, w, L = outline(p)
+    V = m.vertices
+    below = (under_z(p, w, V[:, 0], np.clip(V[:, 1], -6, L + 6), L) - V[:, 2]).max()
+    assert below < 0.02, below
+
+
+def t_remesh_closes_a_leaky_mesh():
+    import trimesh
+    d = tempfile.mkdtemp()
+    s = trimesh.creation.icosphere(3, 5.0)
+    s.update_faces(list(range(8, len(s.faces))))           # punch a hole
+    f = os.path.join(d, "leaky.stl"); s.export(f)
+    r = run({"file": f, "fit": {"size": 20}, "pitch": 0.25}, "remesh")
+    assert r["checks"]["bodies"]["pass"], r["checks"]
+
+
 if __name__ == "__main__":
     bad = 0
     for k, f in list(globals().items()):

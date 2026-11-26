@@ -107,7 +107,14 @@ def view_image(model, elev, azim, px=700, ss=2):
     dz[1:-1, 1:-1] = np.maximum(np.abs(Zm[2:, 1:-1] - Zm[:-2, 1:-1]), np.abs(Zm[1:-1, 2:] - Zm[1:-1, :-2]))
     idc = np.zeros_like(mask)
     idc[1:-1, 1:-1] = (ID[2:, 1:-1] != ID[:-2, 1:-1]) | (ID[1:-1, 2:] != ID[1:-1, :-2])
-    edge = (dz > span * 0.006) | idc
+    # outlines: silhouettes / part changes, big depth jumps, and creases (neighbour normals > ~45 deg apart);
+    # never small depth steps on a sloped smooth surface, which would draw contour lines over it
+    nd = np.zeros_like(Z)
+    nd[1:-1, 1:-1] = np.minimum(np.einsum("ijk,ijk->ij", n[2:, 1:-1], n[:-2, 1:-1]),
+                                np.einsum("ijk,ijk->ij", n[1:-1, 2:], n[1:-1, :-2]))
+    crease = (nd < 0.7) & mask
+    crease[0, :] = crease[-1, :] = False
+    edge = (dz > span * 0.03) | idc | crease
     img[edge] *= 0.4
     img[~mask & ~edge] = 1.0
     return img.reshape(px, ss, px, ss, 3).mean((1, 3))
