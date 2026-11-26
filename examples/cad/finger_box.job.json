@@ -1,1 +1,1 @@
-{"model": "examples/cad/finger_box.py"}
+{"model": "examples/cad/finger_box.py", "cnc": {"tool_d": 0.125}}

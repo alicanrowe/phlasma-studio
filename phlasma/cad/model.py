@@ -95,6 +95,13 @@ def from_json(job):
 
 
 def load(job, opts):
+    m = _load(job, opts)
+    if job.get("cnc"):
+        m.meta["cnc"] = job["cnc"]           # {"tool_d": bit diameter, model units}
+    return m
+
+
+def _load(job, opts):
     if job.get("model"):
         mod = load_py(resolve(job["model"], job))
         p = params_of(job, opts, getattr(mod, "PARAMS", {}))

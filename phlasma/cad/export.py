@@ -60,8 +60,9 @@ def glb(model, path):
     return path
 
 
-def laser_sheets(model, folder, kerf=0.0, gap=None):
-    """nest every plate on the model's sheet (grain along the long side) and write DXF + SVG per sheet"""
+def laser_sheets(model, folder, kerf=0.0, gap=None, dogbone_d=None, suffix=""):
+    """nest every plate on the model's sheet (grain along the long side) and write DXF + SVG per sheet.
+    dogbone_d: CNC bit diameter; relieves every inside corner first (sketch.dogbone)."""
     from .nest import nest
     from .sketch import kerf as kerf_off
     import ezdxf
@@ -84,6 +85,9 @@ def laser_sheets(model, folder, kerf=0.0, gap=None):
         svg = []
         S = model.mm   # svg in mm
         for name, g in placed:
+            if dogbone_d:
+                from .sketch import dogbone
+                g = dogbone(g, dogbone_d)
             g = kerf_off(g, kerf)
             for pg in getattr(g, "geoms", [g]):
                 for ring in pg.interiors:
@@ -93,7 +97,7 @@ def laser_sheets(model, folder, kerf=0.0, gap=None):
                 pts = list(pg.exterior.coords)
                 msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": "CUT_OUTER"})
                 svg.append(_svg_path(pts, S, sh["h"], "#FF0000"))
-        f = os.path.join(folder, f"{model.name}_sheet{si + 1}.dxf")
+        f = os.path.join(folder, f"{model.name}{suffix}_sheet{si + 1}.dxf")
         doc.saveas(f)
         fs = f[:-4] + ".svg"
         W, H = sh["w"] * S, sh["h"] * S
@@ -118,3 +122,57 @@ def parts_json(model, path, extra=None):
     with open(path, "w") as f:
         json.dump(d, f, indent=1)
     return d
+
+
+def _frac(x, den=32):
+    """inches as a shop fraction: 23.47 -> 23 15/32"""
+    n = round(x * den)
+    w, r = divmod(n, den)
+    if r == 0:
+        return f"{w}"
+    from math import gcd
+    g = gcd(r, den)
+    return f"{w} {r // g}/{den // g}" if w else f"{r // g}/{den // g}"
+
+
+def cutlist(model, folder):
+    """one row per group of identical parts: finished L x W x T along the grain, rough blank, species, qty.
+    Plates: L along u (grain). Solid sticks: L along their grain axis. Stones, layers and bought parts skipped."""
+    import csv
+    rows = {}
+    for p in model.parts:
+        if p.role in ("stone", "layer", "bought") or p.material in ("", "enamel"):
+            continue
+        if p.kind == "plate":
+            x0, y0, x1, y1 = p.poly.bounds
+            L, W, T = x1 - x0, y1 - y0, p.thick
+        else:
+            bb = p.shape.bounding_box() if p.kind == "brep" else None    # true size: tenons included
+            e = np.array([bb.size.X, bb.size.Y, bb.size.Z]) if bb else (p.mesh().bounds[1] - p.mesh().bounds[0])
+            g = "xyz".index(p.meta.get("grain", "xyz"[int(np.argmax(e))]))
+            L = float(e[g]); W, T = sorted([float(e[i]) for i in range(3) if i != g], reverse=True)
+        key = (p.material, round(L, 4), round(W, 4), round(T, 4), p.kind)
+        rows.setdefault(key, []).append(p.name)
+    inch = model.units == "in"
+    one_in = 1.0 if inch else 25.4 / model.mm
+    out = []
+    for (mat, L, W, T, kind), names in sorted(rows.items(), key=lambda kv: (-kv[0][1], kv[0][0])):
+        r = {"qty": len(names), "parts": names, "material": mat, "kind": kind, "L": L, "W": W, "T": T,
+             "rough_L": round(L + one_in, 4), "rough_W": round(W + one_in / 4, 4)}
+        if kind != "plate" and r["rough_L"] < 12 * one_in:
+            r["rough_L"] = 12 * one_in          # short parts come out of a 12 in blank (jointer/planer minimum)
+        if inch:
+            r["shop"] = f"{len(names)} x {_frac(L)} x {_frac(W)} x {_frac(T)}"
+        out.append(r)
+    os.makedirs(folder, exist_ok=True)
+    fj = os.path.join(folder, "cutlist.json")
+    with open(fj, "w") as f:
+        json.dump({"units": model.units, "rows": out}, f, indent=1)
+    fc = os.path.join(folder, "cutlist.csv")
+    with open(fc, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["qty", "material", "L", "W", "T", "rough_L", "rough_W", "shop", "parts"])
+        for r in out:
+            w.writerow([r["qty"], r["material"], r["L"], r["W"], r["T"], r["rough_L"], r["rough_W"], r.get("shop", ""),
+                        " ".join(r["parts"])])
+    return [fj, fc], out

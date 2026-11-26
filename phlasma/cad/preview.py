@@ -122,7 +122,7 @@ def render(model, path, views=((24, -58), (0, -90), (90, -90)), px=700, tag=None
     txt = (tag or f"{model.name}  ·  {ext[0]:.1f} x {ext[1]:.1f} x {ext[2]:.1f} mm  ·  {len(model.parts)} parts").lower()
     d = ImageDraw.Draw(img)
     f = os.path.join(BRAND, "fonts", "IBMPlexMono-Regular.ttf")
-    font = ImageFont.truetype(f, 17) if os.path.exists(f) else ImageFont.load_default()
+    font = ImageFont.truetype(f, 17) if os.path.exists(f) else ImageFont.load_default(size=17)
     x0, y0 = 18, img.height - 46
     bb = d.textbbox((x0 + 10, y0 + 6), txt, font=font)
     d.rectangle([x0, y0, bb[2] + 10, bb[3] + 8], fill=ACCENT)
