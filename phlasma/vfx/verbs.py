@@ -172,15 +172,19 @@ def v_render(job, out, log, device=None, **opts):
             "note": "includes readback + encode; profile=true adds a GPU sync per node",
             "adapter": eng.gpu.info}
     expect_motion = job.get("expect_motion", n > 1)
+    warm = arr[1:] if len(arr) > 2 else arr
+    warm_p95 = float(np.percentile(warm, 95))
+    informational = eng.gpu.is_cpu or job.get("realtime_check", True) is False
     checks = {
         "nan_frames": {"pass": not nan_frames, "frames": nan_frames[:20]},
         "black_frames": {"pass": len(black) < n, "count": len(black), "frames": black[:20],
                          "note": "fails only if every frame is black"},
         "motion": {"pass": (still < n - 1) or not expect_motion, "still_pairs": still,
                    "note": "fails if no frame differs from the last (set expect_motion=false for stills)"},
-        "frame_time": {"pass": True if eng.gpu.is_cpu else float(np.percentile(arr, 95)) <= budget,
-                       "p95_ms": perf["frame_ms_p95"], "budget_ms": round(budget, 2),
-                       "informational": eng.gpu.is_cpu},
+        "frame_time": {"pass": True if informational else warm_p95 <= budget,
+                       "p95_ms": round(warm_p95, 2), "budget_ms": round(budget, 2),
+                       "informational": informational,
+                       "note": "first frame (pipeline compile) excluded; informational on CPU or with realtime_check=false"},
     }
     if any(i["level"] == "error" for i in issues):
         checks["graph"] = {"pass": False}

@@ -74,7 +74,7 @@ Patch edits: `{"set":"node.param","value":v}`, `{"add":"id","op":..,"inputs":[..
 `{"output":"id"}`, `{"graph":"fps","value":60}`.
 
 Render checks (in run.json): `nan_frames`, `black_frames` (fails only if all black), `motion` (fails if nothing moves),
-`frame_time` (p95 vs the fps budget; informational on a CPU adapter). Metrics: frame ms mean/p95/max, real-time
+`frame_time` (p95 vs the fps budget, first frame excluded; informational on a CPU adapter or with `realtime_check: false`). Metrics: frame ms mean/p95/max, real-time
 factor, per-node ms.
 
 ## Python
