@@ -141,8 +141,8 @@ def fit_cut(p, s, pad=6.0):
 
 
 def extend(p, s, e):
-    """one lofted body growing out of the free edge (never a part stuck on). e = {"profile": [[f, dz], ...] side-view
-    centreline, f = 0..1 along the reach, dz mm up from the free edge; "reach": length as a multiple of the bed
+    """one lofted body growing out of the nail (never a part stuck on). e = {"from": "free_edge" | "cuticle",
+    "profile": [[f, dz], ...] side-view centreline, f = 0..1 from the start to the far end, dz mm above the shell; "reach": length as a multiple of the bed
     (2.5..3 reads as designed, under 1.5 as a plain nail); "w", "h": half-width / half-height per point, mm;
     "dx": sideways drift per point, mm; "twist": degrees in total; "blend": join radius into the shell}. The root half-width is capped at half the shell's half-width."""
     from .sculpt import loft
@@ -153,9 +153,12 @@ def extend(p, s, e):
     prof = np.asarray(e.get("profile", [[0, 0], [0.5, 0.6], [1, 0.2]]), float)
     n = len(prof)
     dx = np.broadcast_to(np.asarray(e.get("dx", 0.0), float), (n,))
-    y0 = L - min(2.0, 0.3 * L)                                  # start inside the shell, so the two are one body
-    z0 = float(under_z(p, w, np.array([0.0]), np.array([y0]), L)[0]) + p["thick"] / 2
-    pts = np.stack([dx, y0 + prof[:, 0] * (reach + L - y0), z0 + prof[:, 1]], 1)
+    # start inside the shell, so the two are one body. from "cuticle": the form runs the whole nail and grows on
+    # past it (the paid run's best fix for "plain cap, then feature"); "free_edge": it starts at the tip
+    y0 = 0.12 * w if e.get("from", "free_edge") == "cuticle" else L - min(2.0, 0.3 * L)
+    ys = y0 + prof[:, 0] * (reach + L - y0)
+    top = under_z(p, w, np.zeros(n), np.minimum(ys, L), L) + p["thick"] / 2   # rides the shell over the bed
+    pts = np.stack([dx, ys, top + prof[:, 1]], 1)
     hw = float(np.interp(y0, *_halfwidth_profile(pg, y0)))
     W = np.array(e.get("w", np.linspace(max(hw * 0.5, 0.6), 0.3, n)), float)
     H = np.array(e.get("h", np.linspace(p["thick"] * 0.9, 0.3, n)), float)

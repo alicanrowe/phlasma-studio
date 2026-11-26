@@ -68,12 +68,14 @@ No paid service, no GPU, no non-commercial models. Everything runs on a CPU in s
   sits flush. Check `nails`: cuticle width within 0.6 mm of the size and a 0.4 to 1.2 mm shell; resin walls >= 0.3 mm.
 - Nail extensions (`"nail": {..., "extend": {"reach": 2.6, "profile": [[f, dz], ...], "w", "h", "dx", "twist"}}`):
   one lofted body grows out of the free edge, with reach set as a multiple of the bed (2.5 to 3x reads as designed).
-  The root stays inside the shell's crown, so it never reads as a cap with a feature stuck on.
+  The root stays inside the shell's crown, so it never reads as a cap with a feature stuck on. `"from": "cuticle"`
+  runs the form over the whole nail and on past it (the paid run's strongest fix for "plain cap, then feature").
   Example: nail_horn.job.json. `loft` is also a plain sculpt op (elliptical sections along a path).
 - Every imported mesh is welded by position first (`sdf.weld`). AI exports are split along UV seams, and unwelded
   they fill wrong and leave a scrap. `remesh` adds a `survived` check: output area / source area >= 0.6.
 - Learned from the paid run (26 Nov): a side-profile silhouette is the spec; one body, never add-ons; chunky forms
-  over threads and wires; detail as displacement (relief), not booleans.
+  over threads and wires; detail as displacement (relief), not booleans. 30 of 73 paid designs passed taste review:
+  coils, tentacles, horns and branching did best; shells, fabric and thin wings or feathers did worst.
 - A GPU image-to-mesh model (TripoSG or TRELLIS, both MIT) can feed `remesh` on the tower later. It is not wired in.
 
 ## Not in v0 (next)
