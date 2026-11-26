@@ -89,3 +89,36 @@ def arch(x0, x1, h, y=0.0, n=48, eps=0.01):
 def kerf(g, k):
     """offset for the laser: outsides grow k/2, holes shrink k/2, so the part comes out at its drawn size"""
     return g.buffer(k / 2, join_style=2, mitre_limit=4) if k else g
+
+
+def dogbone(g, tool_d, max_angle=179.0):
+    """CNC relief: a round bit can't cut a sharp inside corner, so drill a circle of the bit's diameter into every
+    inside corner (outline notches and hole corners alike), centred on the corner bisector one radius out from the corner (its edge passes through it), so the
+    mating square part still seats fully. Returns the relieved outline."""
+    from shapely.geometry.polygon import orient
+    import numpy as np
+    r = tool_d / 2
+    polys = list(getattr(g, "geoms", [g]))
+    cuts = []
+    for pg in polys:
+        pg = orient(pg, 1.0)                      # material on the left of every ring
+        for ring in [pg.exterior, *pg.interiors]:
+            P = np.array(ring.coords)[:-1]
+            n = len(P)
+            for i in range(n):
+                a, v, b = P[i - 1], P[i], P[(i + 1) % n]
+                e1, e2 = v - a, b - v
+                l1, l2 = np.linalg.norm(e1), np.linalg.norm(e2)
+                if l1 < 1e-9 or l2 < 1e-9:
+                    continue
+                e1, e2 = e1 / l1, e2 / l2
+                if e1[0] * e2[1] - e1[1] * e2[0] >= -1e-9:       # left turn or straight: outside corner
+                    continue
+                turn = np.degrees(np.arccos(np.clip(-(e1 @ e2), -1, 1)))
+                if turn > max_angle:
+                    continue
+                bis = e1 - e2                     # points into the material at an inside corner
+                bis /= np.linalg.norm(bis)
+                c = v - bis * r                    # bit centre: on the bisector, its edge through the corner
+                cuts.append(Point(*c).buffer(r, quad_segs=8))
+    return g.difference(unary_union(cuts)) if cuts else g

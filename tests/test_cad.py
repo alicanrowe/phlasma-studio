@@ -60,6 +60,37 @@ def t_planted_stone_not_stock():
     assert not run(j)["checks"]["stones"]["pass"]
 
 
+def t_stool_ok():
+    r = run({"model": "examples/cad/stool.py"}, "build")
+    assert r["status"] == "ok", r["checks"]
+    rows = json.load(open(r["outputs"]["cutlist"][0]))["rows"]
+    apron = next(x for x in rows if "Apron_F" in x["parts"])
+    assert abs(apron["L"] - 10.5) < 1e-6, apron          # shoulder length + both tenons
+
+
+def t_planted_mortise_near_leg_end():
+    r = run({"model": "examples/cad/stool.py", "params": {"shoulder_top": 0.25}})
+    assert not r["checks"]["joinery"]["pass"]
+
+
+def t_planted_corner_mortises_meet():
+    r = run({"model": "examples/cad/stool.py", "params": {"tenon_len": 1.2}})   # long tenons: no web left
+    j = r["checks"]["joinery"]
+    assert not j["pass"] and (j["thin_webs"] or not r["checks"]["interference"]["pass"]), j
+
+
+def t_planted_bit_too_big():
+    r = run({"model": "examples/cad/finger_box.py", "cnc": {"tool_d": 0.3}})
+    assert not r["checks"]["cnc"]["pass"]
+
+
+def t_dogbone_relieves_corners():
+    from phlasma.cad.sketch import rect, dogbone
+    g = rect(0, 0, 4, 2) - rect(1, 1, 1.5, 1.5)
+    d = dogbone(g, 0.125)
+    assert len(d.interiors) == 1 and d.area < g.area     # reliefs join the hole, never float as islands
+
+
 if __name__ == "__main__":
     bad = 0
     for k, f in list(globals().items()):

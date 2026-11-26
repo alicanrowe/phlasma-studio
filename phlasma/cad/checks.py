@@ -3,9 +3,11 @@
 bodies       every part is one closed body (a stone, a plate, a casting)
 interference no two parts overlap (exact: manifold boolean volume), contact is fine; layers skip their host
 walls        cast/printed metal: ray-sampled wall thickness, 5th percentile >= floor (default 0.8 mm)
+cnc          plates, when a bit is given: no slot, notch or hole narrower than the bit
 laser        plates: fits the bed with grain along the sheet's long side, no bar or web thinner than the sheet
 stones       stock calibrated size, metal over the girdle round at least 180 deg (held), seated
 ring_size    measured inside diameter matches the asked US size within 0.1 mm
+joinery      mortise walls, webs, far face and distance from a leg end (joinery.py rules)
 stands       the assembly rests on its lowest contacts with the centre of mass inside them (furniture)
 """
 import math
@@ -125,6 +127,37 @@ def laser(model):
     return {"pass": bool(ok), "parts": out}
 
 
+def cnc(model, tool_d):
+    """every cut-away gap (slots, notches, holes) must be at least the bit's width, or the bit can't get in"""
+    from shapely.geometry import Polygon
+    out, ok = {}, True
+    r = 0.49 * tool_d
+    for p in model.parts:
+        if p.kind != "plate":
+            continue
+        g = p.poly
+        voids = g.envelope.difference(g)
+        for pg in getattr(g, "geoms", [g]):
+            for ring in pg.interiors:
+                voids = voids.union(Polygon(ring))
+        reach = voids.buffer(-r, join_style=1).buffer(r, join_style=1)
+        bad = voids.difference(reach)
+        geoms = [x for x in getattr(bad, "geoms", [bad]) if not x.is_empty and x.area > 0.5 * tool_d ** 2]
+        # corners the bit rounds are fine (dogboned at export); only gaps narrower than the bit count
+        narrow = [x for x in geoms if x.minimum_rotated_rectangle.length > 0 and
+                  min(_sides(x.minimum_rotated_rectangle)) < tool_d * 0.98]
+        if narrow:
+            ok = False
+            out[p.name] = {"pass": False, "narrow_gaps": [[round(c, 3) for c in x.centroid.coords[0]] for x in narrow[:8]]}
+    return {"pass": bool(ok), "tool_d": tool_d, "parts": out}
+
+
+def _sides(rect):
+    import numpy as np
+    P = np.array(rect.exterior.coords)[:4]
+    return [float(np.linalg.norm(P[1] - P[0])), float(np.linalg.norm(P[2] - P[1]))]
+
+
 def stones(model, held_gap_deg=180.0):
     from .jewelry import ROUND_STOCK, BALL_STOCK
     import trimesh
@@ -224,10 +257,16 @@ def run_all(model, opts):
         res["walls"] = walls(model, floor_mm=chk.get("wall_floor_mm", 0.8))
     if any(p.kind == "plate" for p in model.parts):
         res["laser"] = laser(model)
+    cn = model.meta.get("cnc") or (model.sheet or {}).get("cnc")
+    if cn and any(p.kind == "plate" for p in model.parts):
+        res["cnc"] = cnc(model, cn["tool_d"])
     if any(p.role == "stone" for p in model.parts):
         res["stones"] = stones(model)
     if model.meta.get("ring_size_us"):
         res["ring_size"] = ring_size(model, model.meta["ring_size_us"], model.meta.get("ring_axis", (0, 0, 1)))
+    if model.meta.get("joints"):
+        from .joinery import check as joinery_check
+        res["joinery"] = joinery_check(model)
     if model.kind == "furniture" and chk.get("stands", True):
         res["stands"] = stands(model)
     return res

@@ -36,9 +36,19 @@ check and must catch all of them.
 - gloss_ring.py: a sculpted cocktail ring (balloon shank, four puffs, thorns, crater-set 6 mm stone, four cold
   enamel fields as layer parts, cast hollow). About 20 s. Its ring_size check is what caught a recipe whose cushion
   seat sat inside the finger hole (about one US size small): cut the finger hole last.
+- stool.py: a four-leg stool in solid white oak: legs and aprons as sticks, blind mortise and tenon at every
+  corner (joinery.py), top resting on the aprons; cut list with rough blanks (tenons included in the length).
 - solitaire.job.json: a bezel solitaire in pure JSON, no Python.
 
+## Joinery, CNC and cut lists (v0.2)
+- `joinery.stick()` + `joinery.mortise_tenon()`: tenon on the rail, mortise (fit + bottom clearance) in the post,
+  recorded and checked: walls >= 1/4 in, webs between mortises >= 1/4 in, blind far face >= 1/8 in, mortise
+  >= 1/2 in from a leg end (or say `haunch=True`).
+- `"cnc": {"tool_d": 0.125}` on a job: dogbone relief at every inside corner (`sketch.dogbone`), CNC sheets in
+  `cut_cnc/`, and a check that no slot, notch or hole is narrower than the bit.
+- `build/cutlist.csv|json` for furniture: identical parts grouped, finished L x W x T along the grain, shop
+  fractions, rough blanks (+1 in long, +1/4 in wide, 12 in minimum for solid sticks).
+
 ## Not in v0 (next)
-MCP tool wrapper (core owns mcp.py), sketch constraints, CNC toolpaths and dogbones, 3D mortise-and-tenon
-library + the furniture skill's cadcheck wood-movement rules, cut lists / drawings from plates, faceted stone
+Sketch constraints, the furniture skill's wood-movement rules (cross-grain glue, panel room), drawings, faceted stone
 render, Blender render through core.render, Windows exe build with the rest of the suite.

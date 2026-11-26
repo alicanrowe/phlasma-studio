@@ -4,7 +4,7 @@ import json, os, time
 from phlasma.core.jobs import BadJob
 from . import model as M, checks as C, export as X, preview as P
 
-DEFAULT_EXPORTS = ["step", "stl", "glb", "dxf", "preview"]
+DEFAULT_EXPORTS = ["step", "stl", "glb", "dxf", "cnc", "cutlist", "preview"]
 
 
 def _load(job, opts, log):
@@ -48,6 +48,12 @@ def build(job, out, log, **opts):
             res.setdefault("laser", {"pass": True})
             res["laser"]["pass"] = False
             res["laser"]["too_big"] = nest_rep["too_big"]
+    cnc = job.get("cnc") or (m.sheet or {}).get("cnc")
+    if "cnc" in exports and m.sheet and cnc:
+        files, _ = X.laser_sheets(m, os.path.join(out, "cut_cnc"), kerf=0.0, dogbone_d=cnc["tool_d"], suffix="_cnc")
+        outs["cnc"] = files
+    if "cutlist" in exports and m.kind == "furniture":
+        outs["cutlist"], rows = X.cutlist(m, os.path.join(out, "build"))
     info = X.parts_json(m, os.path.join(out, "parts.json"), {"checks": res, "nest": nest_rep})
     outs["parts"] = os.path.join(out, "parts.json")
     if "preview" in exports:
