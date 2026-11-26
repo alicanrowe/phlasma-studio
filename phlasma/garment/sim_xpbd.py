@@ -49,7 +49,7 @@ def k_dist(x: wp.array(dtype=wp.vec3), w: wp.array(dtype=float), e: wp.array(dty
 @wp.kernel
 def k_dist_gs(x: wp.array(dtype=wp.vec3), w: wp.array(dtype=float), e: wp.array(dtype=wp.vec2i),
               rest: wp.array(dtype=float), kind: wp.array(dtype=int), lam: wp.array(dtype=float), start: int,
-              a_s: float, a_b: float, a_m: float, a_c: float, seam_scale: float):
+              a_s: float, a_b: float, a_m: float, a_c: float, seam_scale: float, sc: wp.array(dtype=float)):
     k = wp.tid() + start
     i = e[k][0]
     j = e[k][1]
@@ -66,7 +66,7 @@ def k_dist_gs(x: wp.array(dtype=wp.vec3), w: wp.array(dtype=float), e: wp.array(
     r = rest[k]
     alpha = a_s
     if c == 1:
-        alpha = a_b
+        alpha = a_b * sc[k]  # per-piece bend stiffness (a collar stand, a stiffened panel)
     if c == 2:
         alpha = a_m
         r = r * seam_scale
@@ -74,7 +74,7 @@ def k_dist_gs(x: wp.array(dtype=wp.vec3), w: wp.array(dtype=float), e: wp.array(
         alpha = a_m
     C = L - r
     if c == 0 and C < 0.0:
-        alpha = a_c  # leather buckles easily but barely stretches
+        alpha = a_c * sc[k]  # leather buckles easily but barely stretches
     dl = (-C - alpha * lam[k]) / (ws + alpha)
     lam[k] = lam[k] + dl
     n = d / L
@@ -157,7 +157,7 @@ def k_vel(x: wp.array(dtype=wp.vec3), xp: wp.array(dtype=wp.vec3), v: wp.array(d
 
 class Cloth:
     def __init__(self, X, uv, tris, piece_id, pairs, body_V, body_F, density=0.9, device=None, log=print, glue=None,
-                 glue_gap=0.0045):
+                 glue_gap=0.0045, stiff=None):
         """X (n,3) start positions [m]; uv (n,2) rest pattern coords [m]; tris (m,3); pairs (k,2) seam vertex pairs.
         density kg/m^2 (1.3 mm steerhide ~ 0.9)."""
         self.dev = wp.get_device(device)
@@ -226,9 +226,14 @@ class Cloth:
         C = np.vstack([Eu, B, pairs.reshape(-1, 2), glue]).astype(np.int64)
         kind = np.r_[np.zeros(len(Eu)), np.ones(len(B)), np.full(len(pairs), 2), np.full(len(glue), 3)].astype(np.int32)
         rest = np.r_[rest_s, rest_b, seam0, np.full(len(glue), glue_gap)].astype(np.float32)
+        # per-piece stiffness factor (1 = the cloth's own): compliance scale 1/factor on bend + compression
+        sp = np.ones(n) if stiff is None else np.asarray(stiff, float)
+        fe = np.minimum(sp[Eu[:, 0]], sp[Eu[:, 1]])
+        fb = np.minimum(sp[B[:, 0]], sp[B[:, 1]]) if len(B) else np.zeros(0)
+        scale = np.r_[1.0 / fe, 1.0 / fb, np.ones(len(pairs)), np.ones(len(glue))].astype(np.float32)
         col = _greedy_colour(C, n)
         order = np.lexsort((kind, col))
-        C, kind, rest, col = C[order], kind[order], rest[order], col[order]
+        C, kind, rest, col, scale = C[order], kind[order], rest[order], col[order], scale[order]
         self.colour_ranges = []
         for c in range(col.max() + 1):
             idx = np.nonzero(col == c)[0]
@@ -236,10 +241,20 @@ class Cloth:
         self.Cc = W(C.astype(np.int32), wp.vec2i)
         self.Ck = W(kind, int)
         self.Cr = W(rest, float)
+        self.Cs = W(scale, float)
         self.lam = wp.zeros(len(C), dtype=float, device=self.dev)
         log("colouring", colours=len(self.colour_ranges), constraints=len(C))
         log("cloth", particles=n, stretch=len(Eu), bend=len(B), seams=len(pairs), mass_kg=round(float(m.sum()), 3),
             device=str(self.dev))
+
+    def pin(self, idx):
+        """Make particles kinematic (inverse mass 0): a cinched belt or waistband that holds the garment up."""
+        w = self.w.numpy()
+        w[np.asarray(idx, int)] = 0.0
+        self.w = wp.array(w.astype(np.float32), dtype=float, device=self.dev)
+        v = self.v.numpy()
+        v[np.asarray(idx, int)] = 0.0
+        self.v = wp.array(v.astype(np.float32), dtype=wp.vec3, device=self.dev)
 
     def set_body(self, V):
         self.bV.assign(V.astype(np.float32))
@@ -258,7 +273,7 @@ class Cloth:
         for it in range(iters):
             for start, cnt in self.colour_ranges:
                 wp.launch(k_dist_gs, cnt, [self.x, self.w, self.Cc, self.Cr, self.Ck, self.lam, start, a_s, a_b, a_m,
-                                           a_c, seam_scale], device=self.dev)
+                                           a_c, seam_scale, self.Cs], device=self.dev)
             if self_r > 0 and it % self_every == 0:
                 self.grid.build(self.x, self_r)
                 wp.launch(k_self, n, [self.x, self.w, self.grid.id, self.uv, self.piece, self.root, self_r, self.dx,
@@ -275,7 +290,8 @@ class Cloth:
         X = self.positions()
         E = self.E.numpy()
         L = np.linalg.norm(X[E[:, 0]] - X[E[:, 1]], axis=1)
-        strain = L / np.maximum(self.rest_s, 1e-9) - 1
+        ok = self.rest_s > 0.002  # sliver edges (< 2 mm rest, e.g. at cut corners) make the ratio meaningless
+        strain = (L / np.maximum(self.rest_s, 1e-9) - 1)[ok] if ok.any() else np.zeros(1)
         S = self.pairs
         gap = np.linalg.norm(X[S[:, 0]] - X[S[:, 1]], axis=1) if len(S) else np.zeros(1)
         out = dict(stretch_p95=float(np.percentile(strain, 95)), stretch_max=float(strain.max()),

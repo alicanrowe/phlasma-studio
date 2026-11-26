@@ -50,6 +50,21 @@ def build(job, h=0.012, log=print):
             if l >= len(P[p].lines):
                 raise ValueError(f"seam refers to line {l} of {P[p].name} which has {len(P[p].lines)} lines")
             P[p].breaks[l].update([round(min(max(f0, 0), 1), 6), round(min(max(f1, 0), 1), 6)])
+    # 1b. sharp corners on any outline (a dovetail shoulder, a laser-cut notch) are breaks too, so sampling keeps them
+    for p in P:
+        for k, line in enumerate(p.lines):
+            Q = np.asarray(line, float)
+            if len(Q) < 3:
+                continue
+            d = _arclen(Q)
+            if d[-1] <= 0:
+                continue
+            a, b = Q[1:-1] - Q[:-2], Q[2:] - Q[1:-1]
+            na, nb = np.linalg.norm(a, axis=1), np.linalg.norm(b, axis=1)
+            ok = (na > 1e-9) & (nb > 1e-9)
+            cos = np.where(ok, (a * b).sum(1) / np.maximum(na * nb, 1e-12), 1.0)
+            for i in np.nonzero(cos < np.cos(np.radians(25)))[0]:
+                p.breaks[k].add(round(float(d[i + 1] / d[-1]), 6))
     # 2. a seam may cover several sub-intervals of a line once other seams add breaks; give each seam one count
     seam_n = []
     report = []

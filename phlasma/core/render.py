@@ -1,7 +1,7 @@
 """Shared studio renderer (Blender as a Python module, Cycles). Headless, no GUI, GPU when present.
 
 render_views(items, out_dir, views=("front","back","side","34"), ...) where items are dicts:
-  {"name", "V": (n,3) m, "F": (m,3), "mat": "leather"|"mannequin"|"clay"|"metal", "color": (r,g,b) linear,
+  {"name", "V": (n,3) m, "F": (m,3), "mat": "leather"|"denim"|"mannequin"|"clay"|"metal", "color": (r,g,b) linear,
    "smooth": True, "thick": 0.0013 (solidify, m)}
 or trimesh objects (rendered as clay). Z up, the subject faces +Y. Output: PNGs composited on white + run metadata.
 """
@@ -36,6 +36,9 @@ def _mat(bpy, kind, color):
         bsdf.inputs["Metallic"].default_value = 1.0
         bsdf.inputs["Roughness"].default_value = 0.25
         return m
+    if kind == "denim":
+        _denim(nt, bsdf, color or (0.045, 0.054, 0.080))
+        return m
     # leather: cloudy hand-dye colour, grain bump, waxy (not lacquer) sheen
     c = color or (0.16, 0.022, 0.026)
     tc = nt.nodes.new("ShaderNodeTexCoord")
@@ -67,16 +70,66 @@ def _mat(bpy, kind, color):
     return m
 
 
+def _denim(nt, bsdf, c):
+    """Rigid twill: diagonal wale bump, warp/weft speckle, soft wash variation, matte with a little sheen."""
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    wash = nt.nodes.new("ShaderNodeTexNoise")
+    wash.inputs["Scale"].default_value = 9.0
+    wash.inputs["Detail"].default_value = 4.0
+    fleck = nt.nodes.new("ShaderNodeTexNoise")
+    fleck.inputs["Scale"].default_value = 2600.0
+    fleck.inputs["Detail"].default_value = 1.0
+    nt.links.new(tc.outputs["Object"], wash.inputs["Vector"])
+    nt.links.new(tc.outputs["Object"], fleck.inputs["Vector"])
+    ramp = nt.nodes.new("ShaderNodeValToRGB")
+    ramp.color_ramp.elements[0].color = (c[0] * 0.82, c[1] * 0.82, c[2] * 0.82, 1)
+    ramp.color_ramp.elements[1].color = (min(1, c[0] * 1.18), min(1, c[1] * 1.18), min(1, c[2] * 1.18), 1)
+    nt.links.new(wash.outputs["Fac"], ramp.inputs["Fac"])
+    lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+    weft = (0.55, 0.55, 0.53) if lum < 0.2 else (c[0] * 0.8, c[1] * 0.8, c[2] * 0.78)
+    fr = nt.nodes.new("ShaderNodeMapRange")
+    fr.inputs["From Min"].default_value = 0.58
+    fr.inputs["From Max"].default_value = 0.75
+    fr.inputs["To Max"].default_value = 0.22
+    nt.links.new(fleck.outputs["Fac"], fr.inputs["Value"])
+    mix = nt.nodes.new("ShaderNodeMix")
+    mix.data_type = "RGBA"
+    nt.links.new(fr.outputs["Result"], mix.inputs["Factor"])
+    nt.links.new(ramp.outputs["Color"], mix.inputs[6])
+    mix.inputs[7].default_value = (*weft, 1)
+    nt.links.new(mix.outputs[2], bsdf.inputs["Base Color"])
+    wave = nt.nodes.new("ShaderNodeTexWave")
+    wave.bands_direction = "DIAGONAL"
+    wave.inputs["Scale"].default_value = 260.0
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = 0.25
+    bump.inputs["Distance"].default_value = 0.0003
+    nt.links.new(tc.outputs["Object"], wave.inputs["Vector"])
+    nt.links.new(wave.outputs["Fac"], bump.inputs["Height"])
+    nt.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
+    bsdf.inputs["Roughness"].default_value = 0.88
+    bsdf.inputs["Specular IOR Level"].default_value = 0.25
+    try:
+        bsdf.inputs["Sheen Weight"].default_value = 0.35
+        bsdf.inputs["Sheen Roughness"].default_value = 0.5
+    except KeyError:
+        pass
+
+
 def _add_curve(bpy, it):
     cu = bpy.data.curves.new(it.get("name", "curve"), "CURVE")
     cu.dimensions = "3D"
     cu.bevel_depth = it.get("radius", 0.001)
     cu.bevel_resolution = 2
-    sp = cu.splines.new("POLY")
-    P = np.asarray(it["curve"], float)
-    sp.points.add(len(P) - 1)
-    for p, q in zip(sp.points, P):
-        p.co = (q[0], q[1], q[2], 1.0)
+    polys = it["curve"] if isinstance(it["curve"], (list, tuple)) else [it["curve"]]
+    for P in polys:
+        P = np.asarray(P, float)
+        if len(P) < 2:
+            continue
+        sp = cu.splines.new("POLY")
+        sp.points.add(len(P) - 1)
+        for p, q in zip(sp.points, P):
+            p.co = (q[0], q[1], q[2], 1.0)
     ob = bpy.data.objects.new(it.get("name", "curve"), cu)
     bpy.context.scene.collection.objects.link(ob)
     ob.data.materials.append(_mat(bpy, it.get("mat", "clay"), it.get("color")))
@@ -100,15 +153,49 @@ def _add_mesh(bpy, it):
         mod = ob.modifiers.new("solid", "SOLIDIFY")
         mod.thickness = it["thick"]
         mod.offset = 1.0
+        if it.get("rim_color"):  # raw cut edge: the rim of the solidified hide gets its own (burnished) colour
+            mod.material_offset_rim = 1
     if it.get("subsurf"):
+        # keep cut outlines crisp: crease every open (boundary) edge so subdivision smooths the hide, not its edges
+        from collections import Counter
+        cnt = Counter()
+        for p_ in me.polygons:
+            vs = list(p_.vertices)
+            for a_, b_ in zip(vs, vs[1:] + vs[:1]):
+                cnt[(min(a_, b_), max(a_, b_))] += 1
+        try:
+            cr = me.attributes.get("crease_edge") or me.attributes.new("crease_edge", "FLOAT", "EDGE")
+            for e in me.edges:
+                v0, v1 = e.vertices
+                cr.data[e.index].value = 1.0 if cnt[(min(v0, v1), max(v0, v1))] == 1 else 0.0
+        except Exception:
+            pass
         mod = ob.modifiers.new("sub", "SUBSURF")
         mod.levels = mod.render_levels = it["subsurf"]
     ob.data.materials.append(_mat(bpy, it.get("mat", "clay"), it.get("color")))
+    if it.get("image") and it.get("uv") is not None:
+        # a CAD part's own texture (wood grain, etched graduations, decals): per-vertex UVs + image into Base Color
+        uv = np.asarray(it["uv"], float)
+        lay = me.uv_layers.new(name="UVMap")
+        vi = np.zeros(len(me.loops), int)
+        me.loops.foreach_get("vertex_index", vi)
+        lay.data.foreach_set("uv", uv[vi].ravel())
+        m = ob.data.materials[0]
+        nt = m.node_tree
+        bsdf = nt.nodes["Principled BSDF"]
+        tex = nt.nodes.new("ShaderNodeTexImage")
+        tex.image = bpy.data.images.load(it["image"])
+        tex.interpolation = "Cubic"
+        nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+    if it.get("rim_color"):
+        rim = _mat(bpy, it.get("mat", "clay"), it["rim_color"])
+        rim.node_tree.nodes["Principled BSDF"].inputs["Coat Weight"].default_value = 0.25  # burnished edge
+        ob.data.materials.append(rim)
     return ob
 
 
 def render_views(items, out_dir, views=("front", "back", "side", "34"), size=(1080, 1350), samples=96,
-                 target=None, height=None, device=None, log=print, prefix="view", floor=True):
+                 target=None, height=None, device=None, log=print, prefix="view", floor=True, elev=0.0, lens=85):
     bpy = _bpy()
     bpy.ops.wm.read_factory_settings(use_empty=True)
     sc = bpy.context.scene
@@ -167,7 +254,7 @@ def render_views(items, out_dir, views=("front", "back", "side", "34"), size=(10
         bpy.ops.mesh.primitive_plane_add(size=20, location=(ctr[0], ctr[1], lo[2]))
         bpy.context.active_object.is_shadow_catcher = True
     cam_d = bpy.data.cameras.new("cam")
-    cam_d.lens = 85
+    cam_d.lens = lens
     cam = bpy.data.objects.new("cam", cam_d)
     sc.collection.objects.link(cam)
     sc.camera = cam
@@ -182,8 +269,10 @@ def render_views(items, out_dir, views=("front", "back", "side", "34"), size=(10
     for v in views:
         ang = math.radians(VIEWS.get(v, float(v) if str(v).replace(".", "").isdigit() else 0))
         # camera orbits the subject; the light rig turns with it so every view is lit the same
-        cam.location = (ctr[0] + dist * math.sin(ang), ctr[1] + dist * math.cos(ang), ctr[2])
-        cam.rotation_euler = (math.radians(90), 0, math.radians(180) + ang * -1)
+        el = math.radians(elev)  # camera elevation above the target (degrees), for things seen from above
+        cam.location = (ctr[0] + dist * math.cos(el) * math.sin(ang), ctr[1] + dist * math.cos(el) * math.cos(ang),
+                        ctr[2] + dist * math.sin(el))
+        cam.rotation_euler = (math.radians(90) - el, 0, math.radians(180) + ang * -1)
         rig.rotation_euler = (0, 0, -ang)
         raw = os.path.join(out_dir, f"_{prefix}_{v}_rgba.png")
         sc.render.filepath = raw

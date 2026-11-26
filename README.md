@@ -26,6 +26,20 @@ Pattern job (the same JSON the CLO pipeline used: pieces as 2D outlines in mm, s
 Every run writes `run.json` with checks: `seams_closed` (seam gap p95), `no_penetration` (cloth inside the body),
 `stretch` (edge strain p95), plus timings per stage.
 
+## Hardware and contents in a job
+- `buttons`: parts that sit on the leather (buckles, tags, tabs): a box or disc on the cloth normal, world-up aligned.
+- `inserts`: hardware that lives inside the leather (`kind`: magnet | stiffener | weight; `d` and `h` in m; `ring`:
+  stitch offset; `pair`: the mating piece). It renders as a soft dome in the hide, conformed to the drape, plus a
+  stitched ring round it, never as a visible part on top. Rule: anything sewn between two layers shows only as
+  displacement + stitch.
+- `held`: a real object in a pocket, sleeve or holster (`obj`: OBJ/GLB, Z up, length on +X; `at`: the pocket mouth on
+  the piece; `at_mm`: the point on the object's length that sits at the mouth; `dir`: down | up). The part inside the
+  pocket is cut away at the mouth; image textures (wood grain, etched scales, decals) are kept.
+- Joints such as dovetails are cut lines between panels (`Garment.cut` with the joint profile), not applied shapes.
+  Corners are kept at every stage (cut, sampling, seam smoothing, subdivision creases), so cut joints stay sharp.
+- Per-piece `stiff` (e.g. 6 for an interfaced collar) scales bend and compression stiffness; job `stance_deg` spreads
+  the mannequin's legs (trousers and culottes).
+
 ## Pattern jobs
 A job is JSON: `patterns[i].points = [[x_mm, y_mm, flag], ...]` (flag 0 marks a corner; line k runs corner k to
 corner k+1) and `seams[j] = {a, la, a0, a1, b, lb, b0, b1, kind}` (pattern a, line la, from fraction a0 to a1, sewn to

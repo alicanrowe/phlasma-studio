@@ -54,6 +54,9 @@ def _torso(p, T):
     return d
 
 
+STANCE_DEG = 0.0  # each leg turned out from the hip (a showroom stance), set per job via drape opt "stance_deg"
+
+
 def joints(arm_angle_deg=50.0, cm=1.0):
     """Key points (cm). arm_angle = angle of the arm from vertical (A-pose)."""
     th = np.radians(arm_angle_deg)
@@ -72,6 +75,10 @@ def joints(arm_angle_deg=50.0, cm=1.0):
         hip = np.array([s * 9.4, -0.5, 90.0])
         kn = np.array([s * 10.6, 0.4, 50.0])
         an = np.array([s * 11.2, -1.2, 8.5])
+        if STANCE_DEG:  # rotate the leg about the hip joint in the frontal plane
+            a = -np.radians(STANCE_DEG) * s
+            R = np.array([[np.cos(a), 0, np.sin(a)], [0, 1, 0], [-np.sin(a), 0, np.cos(a)]])
+            kn, an = hip + R @ (kn - hip), hip + R @ (an - hip)
         J[f"hip_{name}"], J[f"knee_{name}"], J[f"ankle_{name}"] = hip, kn, an
     J["nape"] = np.array([0.0, -6.5, 153.0])
     return J

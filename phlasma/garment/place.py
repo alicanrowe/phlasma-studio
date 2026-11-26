@@ -11,7 +11,9 @@ from . import mannequin as mq
 NAPE_Z = 1.535
 
 
-def classify(base):
+def classify(base, spec=None):
+    if spec and spec.get("place"):
+        return spec["place"]
     b = base.lower()
     if b.startswith(("collar", "neck", "stand", "hood")):
         return "neck"
@@ -35,13 +37,51 @@ def _clear_along(P, C, clear, arm_angle, steps=60, rmax=0.45):
     return C + U * r[:, None]
 
 
+def _smooth(t):
+    t = np.clip(t, 0.0, 1.0)
+    return t * t * (3 - 2 * t)
+
+
+def _leg(x, y, side, spec, J, arm_angle):
+    """Trousers/culottes. x round the body from CB (0) to CF (`cf`, m, at the hip), y up from the waist (<0 below).
+    Above the crotch the cloth wraps the hips like a body piece; below it each leg is a flattened tube round its own
+    leg axis, the back inseam at the inside going round the outside to the front inseam (`span`: depth, x_lo, x_hi).
+    The tube is smaller than the cut, on purpose: the surplus falls into folds as the sim relaxes it."""
+    sg = -1.0 if side in ("L", "") else 1.0  # wearer's left is -X
+    xa = np.abs(x)
+    d = -y
+    wz = float(spec.get("waist_z", 1.10))
+    cf = float(spec.get("cf", 0.70))
+    z = wz - d
+    th = np.pi * np.clip(xa / cf, 0.0, 1.0)
+    a, b = 0.12, 0.08  # inside the body: the ray-clear then hugs the real hip/waist section
+    Ph = np.c_[sg * a * np.sin(th), -b * np.cos(th) - 0.005, z]
+    Ch = np.c_[np.zeros(len(x)), np.full(len(x), -0.005), np.maximum(z, 0.86)]
+    sp = np.asarray(spec.get("span", [[0.285, -0.14, 0.77], [0.74, -0.20, 0.85]]), float)
+    xlo = np.interp(d, sp[:, 0], sp[:, 1])
+    xhi = np.interp(d, sp[:, 0], sp[:, 2])
+    phi = np.pi * (2 * np.clip((xa - xlo) / np.maximum(xhi - xlo, 1e-6), 0, 1) - 1)
+    hip = J["hip_L" if sg < 0 else "hip_R"] / 100.0
+    kn = J["knee_L" if sg < 0 else "knee_R"] / 100.0
+    t = np.clip((hip[2] - z) / (hip[2] - kn[2]), 0, 1.6)
+    axis = hip[None, :] + (kn - hip)[None, :] * t[:, None]
+    cx = sg * np.maximum(np.abs(axis[:, 0]), 0.12)
+    ax, by = 0.085, 0.13 + 0.05 * np.clip((d - 0.3) / 0.4, 0, 1)
+    Pl = np.c_[cx + sg * ax * np.cos(phi), axis[:, 1] + by * np.sin(phi), z]
+    Cl = np.c_[cx, axis[:, 1], z]
+    w = _smooth((d - 0.20) / 0.12)[:, None]
+    X = Ph * (1 - w) + Pl * w
+    C = Ch * (1 - w) + Cl * w
+    return X, C, (w[:, 0] < 0.5) | (np.cos(phi) > -0.2)
+
+
 def place(meshes, arm_angle=50.0, clear=0.025, log=print):
     J = mq.joints(arm_angle)
     out = []
     for M in meshes:
         spec = M["piece"].spec
         uv = M["uv"]
-        kind = classify(spec.get("base", spec["name"]))
+        kind = classify(spec.get("base", spec["name"]), spec)
         side = spec.get("side", "")
         x, y = uv[:, 0], uv[:, 1]
         lay = float(spec.get("layer", 0) or 0)
@@ -86,9 +126,18 @@ def place(meshes, arm_angle=50.0, clear=0.025, log=print):
                 X[k] = ck + Rk * (np.cos(xs[k] / Rk) * uk + np.sin(xs[k] / Rk) * fk) + uk * 0.012
                 C[k] = ck
             X = _clear_along(X, C, clear_p * 0.8, arm_angle, rmax=0.25)
+        elif kind == "leg":
+            X, C, outer = _leg(x, y, side, spec, J, arm_angle)
+            cl = 0.006 if spec.get("pin") else 0.018
+            X = np.where(outer[:, None], _clear_along(X, C, cl, arm_angle), X)
         else:  # neck
-            th = np.pi * x / max(np.abs(x).max(), 1e-6)
-            R = 0.082
+            top = y >= y.max() - 2.0e-3
+            th = np.pi * x / max(np.abs(x[top]).max(), 1e-6)
+            if "fall" not in spec.get("base", ""):
+                th = np.clip(th, -np.pi, np.pi)
+            R = np.full(len(x), 0.082)
+            if "fall" in spec.get("base", ""):  # a collar fall hinged on the stand's top edge: folded down, flared out
+                R = 0.090 + 0.35 * (y.max() - y)
             X = np.c_[-R * np.sin(th), -R * np.cos(th) - 0.006, NAPE_Z + 0.012 + y]
         out.append(X)
         log("place", piece=M["name"], kind=kind, n=len(X))
