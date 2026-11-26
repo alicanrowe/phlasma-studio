@@ -59,6 +59,27 @@ def normal_field(X, tris, pid, bV):
     return nf
 
 
+def _at_point(X, tris, M, at, fallback):
+    """the draped position of a pattern point: barycentric inside the piece triangle that holds it (a vertex
+    snap moves it by up to half the mesh spacing, enough to stack pencils 8 mm apart onto each other)"""
+    o, n = M["offset"], len(M["uv"])
+    T = tris[np.all((tris >= o) & (tris < o + n), axis=1)]
+    if not len(T):
+        return fallback
+    A, B, C = (M["uv"][T[:, k] - o] for k in range(3))
+    v0, v1, v2 = B - A, C - A, at - A
+    den = v0[:, 0] * v1[:, 1] - v1[:, 0] * v0[:, 1]
+    ok = np.abs(den) > 1e-12
+    b1 = np.where(ok, (v2[:, 0] * v1[:, 1] - v1[:, 0] * v2[:, 1]) / np.where(ok, den, 1), -1)
+    b2 = np.where(ok, (v0[:, 0] * v2[:, 1] - v2[:, 0] * v0[:, 1]) / np.where(ok, den, 1), -1)
+    b0 = 1 - b1 - b2
+    inside = (b0 >= -1e-6) & (b1 >= -1e-6) & (b2 >= -1e-6)
+    if not inside.any():
+        return fallback
+    i = int(np.flatnonzero(inside)[0])
+    return b0[i] * X[T[i, 0]] + b1[i] * X[T[i, 1]] + b2[i] * X[T[i, 2]]
+
+
 def topstitch(P, nf, rows=(-0.003, 0.003), lift=0.0021, on=0.0035, off=0.002):
     """Dashed stitch rows either side of a seam/edge polyline, sitting on the cloth surface."""
     P = np.asarray(P, float)
@@ -226,6 +247,7 @@ def drape(job, out, log, **opts):
     t = time.time()
     mq.STANCE_DEG = float(o.get("stance_deg", job.get("stance_deg", 0.0)) or 0.0)
     bV, bF = mq.build_mesh(o["mannequin_res"], o["pose_from"])
+    n_body = len(bV)  # mannequin only (colliders added below are not drawn)
     W = mq.arm_weights(bV, o["pose_from"])
     grow = None
     if o.get("colliders"):  # static props the cloth rests on (tools in a pocket...): boxes grown out of the body
@@ -247,6 +269,37 @@ def drape(job, out, log, **opts):
         W = {k: np.r_[w, np.zeros(len(CV))] for k, w in W.items()}
         grow = lambda f: np.vstack([bV[:nb0], anc + (CV - anc) * f])
         bV = grow(1.0)
+    if o.get("under"):  # garments already draped underneath (layering a whole fit): static colliders grown out
+        # from the body during the sew phase, each one offset outward by its leather plus the patches on it
+        from scipy.spatial import cKDTree as _KD
+        nb0 = len(bV)
+        UV_, UF_ = [], []
+        for u in o["under"]:
+            d_ = np.load(u["state"])
+            Xu, Fu = d_["X"], d_["tris"]
+            nfu = normal_field(Xu, Fu, d_["piece"], bV[:nb0])
+            Xu = Xu + nfu(Xu) * float(u.get("offset_mm", 6.0)) / 1000.0
+            UF_.append(Fu + len(bV) + sum(len(x) for x in UV_))
+            UV_.append(Xu)
+            for mp in u.get("meshes") or []:  # rigid parts worn with it (tools in its pockets), already in place
+                import trimesh as _tm
+                mm_ = _tm.load(mp, force="mesh", process=False)
+                grow_mm = float(u.get("mesh_offset_mm", 1.0)) / 1000.0
+                Vm = np.asarray(mm_.vertices, float) + np.asarray(mm_.vertex_normals, float) * grow_mm
+                UF_.append(np.asarray(mm_.faces) + len(bV) + sum(len(x) for x in UV_))
+                UV_.append(Vm)
+        UV_ = np.vstack(UV_)
+        uanc = bV[:nb0][_KD(bV[:nb0]).query(UV_)[1]]
+        base_grow = grow
+        bF = np.vstack([bF] + UF_)
+        W = {k: np.r_[w, np.zeros(len(UV_))] for k, w in W.items()}
+        nprev = len(bV)
+        def grow(f, _bg=base_grow, _n=nprev):
+            head = _bg(f) if _bg else bV0[:_n]
+            return np.vstack([head, uanc + (UV_ - uanc) * f])
+        bV0 = bV
+        bV = grow(1.0)
+        log("under", garments=len(o["under"]), verts=int(len(UV_)))
     T["mannequin"] = time.time() - t
     t = time.time()
     Xs = place.place(G["meshes"], o["pose_from"], log=log)
@@ -345,7 +398,6 @@ def drape(job, out, log, **opts):
                     Xr[v] = (Xf[base][j] * w[..., None]).sum(1) / w.sum(1)[:, None]
                 nrm = nf(Xr[v])
                 Xr[v] += nrm * ((thick + 0.0004) * (lay + 1) + 0.0015 * lay if lay >= 0 else -0.0015)
-        WV, WF, okf = weld(Xr, tris, G["pairs"], return_mask=True)
         tones, tmat, trim = {}, {}, {}
         for k, v in (o.get("tones") or {}).items():  # "#hex" | rgb | {"color", "mat", "edge"}
             if isinstance(v, dict):
@@ -354,6 +406,175 @@ def drape(job, out, log, **opts):
                     trim[k] = _rgb(v["edge"])
                 v = v["color"]
             tones[k] = _rgb(v)
+        hw_items, rigid = [], []  # rigid parts on/in the leather: (name, mesh, over-mask)
+        btn = o.get("button_color")
+        for k, bt in enumerate(job.get("buttons") or []):  # shank buttons at pattern points, sat on the cloth normal
+            import trimesh as _tm
+            names = [M["name"] for M in G["meshes"]]
+            if bt["piece"] not in names:
+                continue
+            i = names.index(bt["piece"])
+            M = G["meshes"][i]
+            j = int(np.argmin(np.linalg.norm(M["uv"] - np.array(bt["at"]) / 1000.0, axis=1))) + M["offset"]
+            pnt = Xr[j]
+            nrm = nf(pnt)[0]
+            r = bt.get("r", 0.0075)
+            cyl = (_tm.creation.box(extents=bt["box"]) if bt.get("box") else
+                   _tm.creation.cylinder(radius=r, height=0.003, sections=28))
+            # frame on the cloth: z = outward normal, y = world up projected (so a box's 2nd extent is its height)
+            up = np.array([0.0, 0.0, 1.0]) - nrm * nrm[2]
+            up = up / max(np.linalg.norm(up), 1e-9) if np.linalg.norm(up) > 1e-6 else np.array([0.0, 1.0, 0.0])
+            Tb = np.eye(4)
+            Tb[:3, :3] = np.c_[np.cross(up, nrm), up, nrm]
+            cyl.apply_transform(Tb)
+            depth = (bt["box"][2] / 2 if bt.get("box") else 0.0015) + bt.get("gap", 0.0003)
+            cyl.apply_translation(pnt + nrm * (thick + depth + bt.get("lift", 0.0)) + up * bt.get("drop", 0.0)
+                                  + np.cross(up, nrm) * bt.get("shift", 0.0))
+            rigid.append((f"button{k}/box", cyl.copy(), np.zeros(len(Xr), bool), len(hw_items), nrm.copy(), f"button{k}"))
+            tn = bt.get("tone")
+            if bt.get("color"):  # a fixed-colour part (tag, the top of a cigarette pack)
+                hw_items.append({"name": f"hw{k}", "V": cyl.vertices, "F": cyl.faces, "mat": bt.get("mat", "clay"),
+                              "color": _rgb(bt["color"]), "smooth": False, "frame": False})
+            elif tn is not None:  # a leather piece (holster, tab) in one of the garment's leathers
+                hw_items.append({"name": f"hw{k}", "V": cyl.vertices, "F": cyl.faces, "mat": tmat.get(tn, mat),
+                              "color": tones.get(tn, col), "smooth": False, "frame": False})
+            else:
+                hw_items.append({"name": f"button{k}", "V": cyl.vertices, "F": cyl.faces, "mat": "metal",
+                              "smooth": False, "color": _rgb(btn) if btn else (0.30, 0.20, 0.09), "frame": False})
+        for k, hd in enumerate(job.get("held") or []):
+            # a real tool held in a pocket/sleeve/holster: photo-matched CAD (Z up, longest axis +X) placed on the
+            # cloth frame, its long axis along "dir", the tool point at_mm on its long axis at the pocket mouth.
+            # seat: the named part (e.g. the blade) lies IN the pocket, on the hide under it; the cloth is then seated
+            # round the whole tool (pressed in under it, lifted over it) and the clipping gate checks the result.
+            import trimesh as _tm
+            names = [M["name"] for M in G["meshes"]]
+            if hd["piece"] not in names or not os.path.exists(hd["obj"]):
+                log("held_skipped", "warn", piece=hd["piece"], obj=hd["obj"])
+                continue
+            i = names.index(hd["piece"])
+            M = G["meshes"][i]
+            j = int(np.argmin(np.linalg.norm(M["uv"] - np.array(hd["at"]) / 1000.0, axis=1))) + M["offset"]
+            pnt = _at_point(Xr, tris, M, np.array(hd["at"]) / 1000.0, Xr[j])  # exact, not snapped to a vertex
+            near = M["offset"] + np.flatnonzero(np.linalg.norm(Xr[M["offset"]:M["offset"] + len(M["uv"])] - pnt, axis=1) < 0.035)
+            nrm = nf(Xr[near]).mean(0) if len(near) else nf(pnt)[0]
+            nrm = nrm / max(np.linalg.norm(nrm), 1e-9)
+            up = np.array([0.0, 0.0, 1.0]) - nrm * nrm[2]
+            up = up / max(np.linalg.norm(up), 1e-9)
+            sd = np.cross(up, nrm)
+            ang = np.radians(float(hd.get("tilt_deg", 0.0)))
+            sgn = {"down": 1.0, "up": -1.0}[hd.get("dir", "down")]
+            dvec = np.cos(ang) * -up + np.sin(ang) * sd
+            if hd.get("align", bool(hd.get("seat"))):  # follow the pocket as draped: its long axis, centred across it
+                Pp = Xr[M["offset"]:M["offset"] + len(M["uv"])]
+                cpp = Pp.mean(0)
+                Cp = np.cov((Pp - cpp).T)
+                Cp = Cp - np.outer(nrm, nrm) * (nrm @ Cp @ nrm)
+                ax_p = np.linalg.eigh(Cp)[1][:, -1]
+                ax_p = ax_p - nrm * (ax_p @ nrm)
+                ax_p /= max(np.linalg.norm(ax_p), 1e-9)
+                if ax_p @ dvec < 0:
+                    ax_p = -ax_p
+                dvec = np.cos(ang) * ax_p + np.sin(ang) * np.cross(ax_p, nrm)
+                sv_ = np.cross(nrm, dvec)
+                if hd.get("center"):  # one tool per pocket: centred across it (not for a strip of pencils)
+                    pnt = pnt + sv_ * float((cpp - pnt) @ sv_)
+                elif hd.get("center_ref") is not None:  # a bundle: shift every member so the bundle is centred
+                    ref = _at_point(Xr, tris, M, np.array(hd["center_ref"]) / 1000.0, pnt)
+                    pnt = pnt + sv_ * float((cpp - ref) @ sv_)
+            svec = np.cross(nrm, dvec)
+            roll = bool(hd.get("flip_side"))
+            over_names = hd.get("over") or [hd["piece"]]
+            over_ids = [ii for ii, MM in enumerate(G["meshes"]) if MM["name"] in over_names]
+            over_mask = np.isin(pid, over_ids)
+            seat_on = hd.get("seat")
+            base_pt = pnt + nrm * thick
+            if seat_on:  # the hide under the pocket: cast from the pocket mouth along -normal through the cloth below
+                keepF = ~np.isin(pid[tris[:, 0]], over_ids)
+                under = _tm.Trimesh(Xr, tris[keepF], process=False)
+                loc, _, _ = under.ray.intersects_location([pnt + nrm * 0.002], [-nrm])
+                if len(loc):
+                    h = loc[np.argmin(np.linalg.norm(loc - pnt, axis=1))]
+                    base_pt = h + nf(h)[0] * thick
+            sc = _tm.load(hd["obj"], force="scene")
+            parts = []
+            for gm in sc.dump(concatenate=False):
+                gname = gm.metadata.get("name") or gm.metadata.get("node") or "part"
+                m = gm.copy()
+                if hd["obj"].endswith(".glb"):
+                    m.apply_transform(_tm.transformations.rotation_matrix(np.pi / 2, [1, 0, 0]))
+                Vt = np.asarray(m.vertices, float) * float(hd.get("scale", 0.001))
+                parts.append((gname, gm, m, Vt))
+            zall = np.vstack([p_[3] for p_ in parts])[:, 2]
+            zmax_all = zall.max()
+            def lz(Vt):
+                return (zmax_all - Vt[:, 2]) if roll else Vt[:, 2]
+            if seat_on:
+                zs = [lz(Vt) for (gname, gm, m, Vt) in parts if seat_on in gname.lower()]
+                z0 = min(z.min() for z in zs) if zs else 0.0
+            else:
+                z0 = 0.0
+            lift = float(hd.get("lift", 0.0006 if seat_on else 0.0005))
+            for gname, gm, m, Vt in parts:
+                a = np.array([float(hd.get("at_mm", 0.0)) / 1000.0, float(hd.get("y0_mm", 0.0)) / 1000.0, 0.0])
+                L = Vt - a
+                if roll:
+                    L[:, 1] = -L[:, 1]
+                L2 = lz(Vt) - z0
+                org = base_pt + nrm * lift if seat_on else pnt + nrm * (thick + lift)
+                W = org + np.outer(sgn * L[:, 0], dvec) + np.outer(sgn * L[:, 1], svec) \
+                    + np.outer(L2 * (-1 if hd.get("face_in") else 1), nrm)
+                mm = _tm.Trimesh(W, m.faces, process=False)
+                whole = True
+                if not seat_on and hd.get("hide_below", True):  # legacy: cut at the mouth plane
+                    mm, whole = _cut_keep(mm, pnt, -dvec)
+                if mm is None or len(mm.faces) == 0:
+                    continue
+                # the job's "over" pieces lie over the whole tool wherever they meet it (a pencil's ferrule as much as
+                # its cedar); a pad the tool rests on (a welt under a square's head) must not be listed as over
+                ov = over_mask
+                rigid.append((f"held{k}/{gname}", mm, ov, len(hw_items), nrm.copy(), hd.get("rest_with") or f"held{k}"))
+                tx = _part_texture(mm, os.path.basename(hd["obj"]) + gname)
+                low = gname.lower()
+                kd = _part_color(gm)
+                metal = any(t in low for t in ("blade", "brass", "steel", "stainless", "pvd", "bronze", "ferrule", "screw", "iron", "metal"))
+                mf = getattr(getattr(gm.visual, "material", None), "metallicFactor", None)
+                if mf is not None:  # a PBR part says for itself whether it is metal
+                    metal = float(mf) >= 0.5
+                if metal and (kd is None or float(np.mean(kd)) < 0.35):
+                    kd = np.array([0.74, 0.75, 0.77])
+                if "black" in low or "web" in low:
+                    kd = np.array([0.06, 0.06, 0.065])
+                col = tuple(float(c) for c in (kd if kd is not None else (0.6, 0.6, 0.6)))
+                col = tuple(c ** 2.2 for c in col)
+                hw_items.append({"name": f"held{k}_{gname}", "V": mm.vertices, "F": mm.faces,
+                                 "mat": hd.get("mats", {}).get(gname, "metal" if metal else "clay"), "color": col,
+                                 "smooth": False, "frame": False, **({"uv": tx[0], "image": tx[1]} if tx else {})})
+        if rigid:  # the cloth gives way round every rigid part, then the hard clipping gate
+            from . import contact
+            if o.get("contact_dump"):  # inputs for tuning the seat offline
+                import pickle
+                pickle.dump({"names": [M_["name"] for M_ in G["meshes"]], "Xr": Xr.copy(), "tris": tris, "Xf": Xf, "pid": pid, "bVp": bVp, "thick": thick,
+                             "rigid": [(r[0], np.asarray(r[1].vertices), np.asarray(r[1].faces), r[2], r[4], r[5]) for r in rigid]},
+                            open(o["contact_dump"], "wb"))
+            if o.get("seat", True):
+                groups = {}
+                for r in rigid:
+                    groups.setdefault(r[5], []).append(r)  # a strip of pencils rests as one bundle
+                for gk, rs in groups.items():  # each tool / button rests ON the cloth it isn't tucked under
+                    up_, tl_ = contact.rest(Xr, nf, thick, [r[1] for r in rs], [~r[2] for r in rs], rs[0][4])
+                    for r in rs:
+                        hw_items[r[3]]["V"] = np.asarray(r[1].vertices).copy()
+                    if up_ > 1e-5:
+                        log("rest", part=gk, lift_mm=round(up_ * 1000, 2), tilt_deg=round(float(np.degrees(tl_)), 2))
+                contact.seat(Xr, tris, nf, thick, [r[1] for r in rigid], [r[2] for r in rigid], log=log)
+            rep = contact.clip_report(Xr, tris, nf, thick, [r[1] for r in rigid], [r[0] for r in rigid],
+                                      tol=float(o.get("clip_tol_mm", 0.5)) / 1000.0)
+            checks["clipping"] = rep
+            log("clipping", **{k_: v_ for k_, v_ in rep.items() if k_ != "hits"}, hits=rep["hits"][:8])
+            json.dump(rep, open(os.path.join(out, "clipping.json"), "w"), indent=1)
+            if not rep["pass"] and not o.get("allow_clip"):
+                raise RuntimeError(f"clipping gate failed (worst {rep['worst_mm']} mm): {rep['hits'][:4]}")
+        WV, WF, okf = weld(Xr, tris, G["pairs"], return_mask=True)
         ftone = np.array([M["piece"].spec.get("tone", "") for M in G["meshes"]], object)[pid[tris[okf, 0]]]
         items = [{"name": "mannequin", "V": bVp, "F": bF, "mat": "mannequin", "frame": False}]
         for tn in sorted(set(ftone)):
@@ -419,8 +640,8 @@ def drape(job, out, log, **opts):
                     continue
                 P2 = np.asarray(ln["pts"], float) / 1000.0 * ([-1.0, 1.0] if sp.get("side") == "R" else [1.0, 1.0])
                 d = np.r_[0, np.cumsum(np.linalg.norm(np.diff(P2, axis=0), axis=1))]
-                t = np.linspace(0, d[-1], max(2, int(d[-1] / 0.004)))
-                P2 = np.c_[np.interp(t, d, P2[:, 0]), np.interp(t, d, P2[:, 1])]
+                tl = np.linspace(0, d[-1], max(2, int(d[-1] / 0.004)))
+                P2 = np.c_[np.interp(tl, d, P2[:, 0]), np.interp(tl, d, P2[:, 1])]
                 from scipy.spatial import cKDTree as _T2
                 dd, jj = _T2(M["uv"]).query(P2, k=6)
                 w = 1.0 / np.maximum(dd, 1e-5) ** 2
@@ -435,39 +656,6 @@ def drape(job, out, log, **opts):
                     items.append({"name": f"lstitch_{M['name']}_{len(items)}", "curve": topstitch(
                         P3, nf, rows=tuple(ln.get("rows", (0.005,))), lift=thick + 0.0006),
                         "radius": 0.00045, "mat": "clay", "color": _rgb(o["stitch"]), "frame": False})
-        btn = o.get("button_color")
-        for k, bt in enumerate(job.get("buttons") or []):  # shank buttons at pattern points, sat on the cloth normal
-            import trimesh as _tm
-            names = [M["name"] for M in G["meshes"]]
-            if bt["piece"] not in names:
-                continue
-            i = names.index(bt["piece"])
-            M = G["meshes"][i]
-            j = int(np.argmin(np.linalg.norm(M["uv"] - np.array(bt["at"]) / 1000.0, axis=1))) + M["offset"]
-            pnt = Xr[j]
-            nrm = nf(pnt)[0]
-            r = bt.get("r", 0.0075)
-            cyl = (_tm.creation.box(extents=bt["box"]) if bt.get("box") else
-                   _tm.creation.cylinder(radius=r, height=0.003, sections=28))
-            # frame on the cloth: z = outward normal, y = world up projected (so a box's 2nd extent is its height)
-            up = np.array([0.0, 0.0, 1.0]) - nrm * nrm[2]
-            up = up / max(np.linalg.norm(up), 1e-9) if np.linalg.norm(up) > 1e-6 else np.array([0.0, 1.0, 0.0])
-            Tb = np.eye(4)
-            Tb[:3, :3] = np.c_[np.cross(up, nrm), up, nrm]
-            cyl.apply_transform(Tb)
-            depth = (bt["box"][2] / 2 if bt.get("box") else 0.0015) + bt.get("gap", 0.0003)
-            cyl.apply_translation(pnt + nrm * (thick + depth + bt.get("lift", 0.0)) + up * bt.get("drop", 0.0)
-                                  + np.cross(up, nrm) * bt.get("shift", 0.0))
-            tn = bt.get("tone")
-            if bt.get("color"):  # a fixed-colour part (tag, the top of a cigarette pack)
-                items.append({"name": f"hw{k}", "V": cyl.vertices, "F": cyl.faces, "mat": bt.get("mat", "clay"),
-                              "color": _rgb(bt["color"]), "smooth": False, "frame": False})
-            elif tn is not None:  # a leather piece (holster, tab) in one of the garment's leathers
-                items.append({"name": f"hw{k}", "V": cyl.vertices, "F": cyl.faces, "mat": tmat.get(tn, mat),
-                              "color": tones.get(tn, col), "smooth": False, "frame": False})
-            else:
-                items.append({"name": f"button{k}", "V": cyl.vertices, "F": cyl.faces, "mat": "metal",
-                              "smooth": False, "color": _rgb(btn) if btn else (0.30, 0.20, 0.09), "frame": False})
         for k, ins in enumerate(job.get("inserts") or []):
             # hidden hardware (magnet | stiffener | weight) sewn between two layers: it shows only as a soft dome in
             # the hide over it plus a saddle-stitched ring round it, never as a visible part on top
@@ -477,7 +665,11 @@ def drape(job, out, log, **opts):
             i = names.index(ins["piece"])
             M = G["meshes"][i]
             j = int(np.argmin(np.linalg.norm(M["uv"] - np.array(ins["at"]) / 1000.0, axis=1))) + M["offset"]
-            pnt, nrm = Xr[j], nf(Xr[j])[0]
+            pnt = Xr[j]
+            # the pocket's plane, not one vertex: average the normals over the piece within 35 mm of the mouth
+            near = M["offset"] + np.flatnonzero(np.linalg.norm(Xr[M["offset"]:M["offset"] + len(M["uv"])] - pnt, axis=1) < 0.035)
+            nrm = nf(Xr[near]).mean(0) if len(near) else nf(pnt)[0]
+            nrm = nrm / max(np.linalg.norm(nrm), 1e-9)
             up = np.array([0.0, 0.0, 1.0]) - nrm * nrm[2]
             up = up / max(np.linalg.norm(up), 1e-9)
             sd = np.cross(up, nrm)
@@ -521,57 +713,7 @@ def drape(job, out, log, **opts):
                 ring = ring + nf(ring) * thick  # on the hide, conformed like the dome
                 items.append({"name": f"insert{k}_ring", "curve": topstitch(ring, nf, rows=(0.0,), lift=0.0004),
                               "radius": 0.00045, "mat": "clay", "color": _rgb(o["stitch"]), "frame": False})
-        for k, hd in enumerate(job.get("held") or []):
-            # a real tool held in a pocket/sleeve/holster: photo-matched CAD (mm, Z up, longest axis +X) placed on the
-            # cloth frame (x = side, y = up, z = out), its long axis along "dir", the tool point at_mm on its long axis
-            # sitting at the pocket mouth; the part inside the pocket is cut away (the pocket hides it)
-            import trimesh as _tm
-            names = [M["name"] for M in G["meshes"]]
-            if hd["piece"] not in names or not os.path.exists(hd["obj"]):
-                log("held_skipped", "warn", piece=hd["piece"], obj=hd["obj"])
-                continue
-            i = names.index(hd["piece"])
-            M = G["meshes"][i]
-            j = int(np.argmin(np.linalg.norm(M["uv"] - np.array(hd["at"]) / 1000.0, axis=1))) + M["offset"]
-            pnt, nrm = Xr[j], nf(Xr[j])[0]
-            up = np.array([0.0, 0.0, 1.0]) - nrm * nrm[2]
-            up = up / max(np.linalg.norm(up), 1e-9)
-            sd = np.cross(up, nrm)
-            ang = np.radians(float(hd.get("tilt_deg", 0.0)))  # lean of the long axis in the cloth plane
-            # dvec = into the pocket (down); dir "up" turns the tool end for end (+X out of the pocket) without mirroring
-            sgn = {"down": 1.0, "up": -1.0}[hd.get("dir", "down")]
-            dvec = np.cos(ang) * -up + np.sin(ang) * sd
-            svec = np.cross(nrm, dvec) * (-1 if hd.get("flip_side") else 1)
-            sc = _tm.load(hd["obj"], force="scene")
-            for gm in sc.dump(concatenate=False):  # node transforms applied
-                gname = gm.metadata.get("name") or gm.metadata.get("node") or "part"
-                m = gm.copy()
-                if hd["obj"].endswith(".glb"):  # GLB is Y up: back to the CAD frame (Z up)
-                    m.apply_transform(_tm.transformations.rotation_matrix(np.pi / 2, [1, 0, 0]))
-                Vt = np.asarray(m.vertices, float) * float(hd.get("scale", 0.001))  # mm -> m
-                a = np.array([float(hd.get("at_mm", 0.0)) / 1000.0, float(hd.get("y0_mm", 0.0)) / 1000.0, 0.0])
-                L = Vt - a
-                W = pnt + nrm * (thick + float(hd.get("lift", 0.0005))) + np.outer(sgn * L[:, 0], dvec) + np.outer(sgn * L[:, 1], svec) \
-                    + np.outer(L[:, 2] * (-1 if hd.get("face_in") else 1), nrm)
-                mm = _tm.Trimesh(W, m.faces, process=False)
-                whole = True
-                if hd.get("hide_below", True):  # inside the pocket: cut at the mouth plane
-                    mm, whole = _cut_keep(mm, pnt, -dvec)
-                if mm is None or len(mm.faces) == 0:
-                    continue
-                tx = _part_texture(mm, os.path.basename(hd["obj"]) + gname)
-                low = gname.lower()
-                kd = _part_color(gm)
-                metal = any(t in low for t in ("blade", "brass", "steel", "stainless", "pvd", "bronze", "ferrule", "screw", "iron", "metal"))
-                if metal and (kd is None or float(np.mean(kd)) < 0.35):
-                    kd = np.array([0.74, 0.75, 0.77])  # OBJ exports of textured/etched steel come out dark: bare steel
-                if "black" in low or "web" in low:
-                    kd = np.array([0.06, 0.06, 0.065])
-                col = tuple(float(c) for c in (kd if kd is not None else (0.6, 0.6, 0.6)))
-                col = tuple(c ** 2.2 for c in col)  # sRGB -> linear
-                items.append({"name": f"held{k}_{gname}", "V": mm.vertices, "F": mm.faces,
-                              "mat": hd.get("mats", {}).get(gname, "metal" if metal else "clay"), "color": col,
-                              "smooth": False, "frame": False, **({"uv": tx[0], "image": tx[1]} if tx else {})})
+        items += hw_items
         for k, it in enumerate(o.get("props") or []):  # simple extra meshes (buttons, straps, tools), already in place
             items.append({"name": f"prop{k}", **it, "frame": False})
         lo, hi = WV.min(0), WV.max(0)
@@ -579,6 +721,12 @@ def drape(job, out, log, **opts):
             tgt, hgt = (0, 0, 1.02), 1.95
         else:  # product framing: the garment fills the frame with ~9% margin (PHOTO_STANDARD)
             tgt, hgt = (lo + hi) / 2, (hi[2] - lo[2]) * 1.2
+        if o.get("items_dump"):  # the render scene as data, so several garments can be layered into one fit render
+            import pickle
+            with open(o["items_dump"], "wb") as fh:
+                pickle.dump({"items": items, "target": tgt, "height": hgt, "n_body": n_body}, fh)
+        if o.get("items_only"):
+            return {"outputs": files, "checks": checks, "metrics": {}, "seams": G["seam_report"]}
         imgs = render_views(items, out, o["views"], size=tuple(o["size"]), samples=o["samples"],
                             target=tgt, height=hgt, device=None if dev != "cpu" else "cpu", log=log,
                             floor=o.get("frame", "garment") == "full")
