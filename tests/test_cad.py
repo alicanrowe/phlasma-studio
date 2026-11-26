@@ -185,6 +185,14 @@ def t_nail_extension_is_one_body_with_reach():
     assert info["parts"][0]["bbox_mm"][1] > 2.5 * 13.3, info["parts"][0]["bbox_mm"]     # reach past the bed
 
 
+def t_planted_square_block_with_hard_step():
+    """a square bed that stops, with the feature carrying on off its end: the joint check must catch it"""
+    j = load("nail_horn.job.json")
+    n = j["parts"][0]["nail"]; n.update(shape="square", ext=1.5, pitch=0.1); j["parts"][0]["sculpt"]["voxel"] = 0.1
+    r = run(j)
+    assert not r["checks"]["nails"]["pass"] and r["checks"]["nails"]["parts"]["nail"]["joint_step"] > 0.3, r["checks"]
+
+
 if __name__ == "__main__":
     bad = 0
     for k, f in list(globals().items()):

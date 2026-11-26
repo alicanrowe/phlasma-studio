@@ -70,6 +70,8 @@ No paid service, no GPU, no non-commercial models. Everything runs on a CPU in s
   one lofted body grows out of the free edge, with reach set as a multiple of the bed (2.5 to 3x reads as designed).
   The root stays inside the shell's crown, so it never reads as a cap with a feature stuck on. `"from": "cuticle"`
   runs the form over the whole nail and on past it (the paid run's strongest fix for "plain cap, then feature").
+  Use a tapering bed (almond, stiletto, oval) under an extension: the `nails` check adds joint_step (plan width lost
+  over any 1 mm near the shell's end, / nail width, <= 0.3), which fails a square bed block with a hard step.
   Example: nail_horn.job.json. `loft` is also a plain sculpt op (elliptical sections along a path).
 - Every imported mesh is welded by position first (`sdf.weld`). AI exports are split along UV seams, and unwelded
   they fill wrong and leave a scrap. `remesh` adds a `survived` check: output area / source area >= 0.6.
