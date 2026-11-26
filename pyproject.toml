@@ -12,3 +12,6 @@ cad = ["build123d", "manifold3d", "ezdxf", "numba", "fast-simplification", "rtre
 
 [project.scripts]
 phlasma = "phlasma.core.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["phlasma*"]
