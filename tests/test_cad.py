@@ -161,6 +161,30 @@ def t_remesh_closes_a_leaky_mesh():
     assert r["checks"]["bodies"]["pass"], r["checks"]
 
 
+def t_seam_split_mesh_welds_before_remesh():
+    """AI exports (Tripo GLBs) are split along UV seams; unwelded, the voxel fill leaves a scrap"""
+    import numpy as np, trimesh
+    d = tempfile.mkdtemp()
+    s = trimesh.creation.icosphere(3, 5.0)
+    V = s.vertices[s.faces].reshape(-1, 3)                  # every face its own vertices, as a seam-split export
+    F = np.arange(len(V)).reshape(-1, 3)
+    uv = np.random.default_rng(0).random((len(V), 2))      # distinct UVs per corner keep a plain merge split
+    m = trimesh.Trimesh(V, F, process=False, visual=trimesh.visual.TextureVisuals(uv=uv))
+    f = os.path.join(d, "split.glb"); m.export(f)
+    assert not trimesh.load(f, force="mesh").is_watertight
+    r = run({"file": f, "fit": {"size": 20}, "pitch": 0.25}, "remesh")
+    assert r["checks"]["survived"]["pass"] and r["checks"]["bodies"]["pass"], r["checks"]
+
+
+def t_nail_extension_is_one_body_with_reach():
+    j = load("nail_horn.job.json")
+    j["parts"][0]["nail"]["pitch"] = 0.1; j["parts"][0]["sculpt"]["voxel"] = 0.1
+    r = run(j, "build")
+    info = json.load(open(r["outputs"]["parts"]))
+    assert r["status"] == "ok" and r["checks"]["bodies"]["pass"], r["checks"]
+    assert info["parts"][0]["bbox_mm"][1] > 2.5 * 13.3, info["parts"][0]["bbox_mm"]     # reach past the bed
+
+
 if __name__ == "__main__":
     bad = 0
     for k, f in list(globals().items()):

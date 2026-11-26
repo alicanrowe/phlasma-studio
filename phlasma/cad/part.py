@@ -101,7 +101,7 @@ class Part:
         if self.kind == "plate":
             d["thick"] = self.thick
             d["outline_bbox"] = [round(x, 4) for x in self.poly.bounds]
-        for k in ("grain", "host", "finish", "stone"):
+        for k in ("grain", "host", "finish", "stone", "nail"):
             if k in self.meta:
                 d[k] = self.meta[k]
         return d

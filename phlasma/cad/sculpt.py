@@ -4,6 +4,8 @@
      {"blob": {"c": [x,y,z], "r": [rx,ry,rz], "x": [axis], "z": [axis]}}         ellipsoid
      {"ball": {"c": [...], "r": 2}}
      {"stroke": {"pts": [[x,y,z], ...], "r": [r0, r1, ...] | r, "smooth": 0.3}}  member along a path, radius per point
+     {"loft": {"pts": [...], "w": [half-widths], "h": [half-heights], "up": [axis], "twist": 0}}  one body
+                                                                                 swept through elliptical sections
      {"ring": {"c": [...], "R": 8, "r": 1, "n": [axis]}}                         torus
      {"cone": {"a": [...], "b": [...], "ra": 1, "rb": 0.2, "round": true}}
      {"box": {"c": [...], "size": [...], "round": 0.5}}
@@ -24,7 +26,7 @@
 import os
 import numpy as np
 
-from .sdf import Scene, mesh_to_sdf, nz
+from .sdf import Scene, mesh_to_sdf, nz, weld
 
 OPS = {"add": 0, "sub": 1, "int": 2}
 
@@ -143,9 +145,44 @@ def _centre_grid(D, lo, pitch, at=None, centre=True):
 # ------------------------------------------------------------------ JSON brush scenes
 def load_mesh(path, scale=1.0):
     import trimesh
-    m = trimesh.load(path, force="mesh")
+    m = weld(trimesh.load(path, force="mesh"))
     m.apply_scale(scale)
     return m
+
+
+def loft(s, pts, w, h, up=(0, 0, 1), step=0.2, op=0, k=None, twist=0.0, k_join=0.0):
+    """one body swept along a path through elliptical sections: half-width w and half-height h per point (either
+    may be a number), "up" sets which way h points (rotated by twist degrees in total along the path). Sections are
+    densified to `step` and blended (radius k, default 2 x step), so the result is one continuous surface. The first
+    section joins what is already in the scene with blend k_join (the op's "k")."""
+    from scipy.interpolate import CubicSpline
+    P = np.asarray(pts, float)
+    n = len(P)
+    W = np.broadcast_to(np.asarray(w, float), (n,)).astype(float)
+    H = np.broadcast_to(np.asarray(h, float), (n,)).astype(float)
+    t = np.r_[0, np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))]
+    L = t[-1]
+    m = max(int(np.ceil(L / step)) + 1, 2)
+    tt = np.linspace(0, L, m)
+    if n >= 3:
+        Pd = CubicSpline(t, P, bc_type="natural")(tt)
+    else:
+        Pd = np.stack([np.interp(tt, t, P[:, i]) for i in range(3)], 1)
+    Wd, Hd = np.interp(tt, t, W), np.interp(tt, t, H)
+    T = np.gradient(Pd, axis=0)
+    up = nz(up)
+    k = step * 2.0 if k is None else k
+    for i in range(m):
+        ti = nz(T[i])
+        side = np.cross(ti, up)
+        side = nz(side) if np.linalg.norm(side) > 1e-6 else nz(np.cross(ti, [1.0, 0, 0]))
+        u = np.cross(side, ti)
+        a = np.radians(twist) * tt[i] / max(L, 1e-9)
+        side, u = side * np.cos(a) + u * np.sin(a), u * np.cos(a) - side * np.sin(a)
+        r_along = max(step * 1.6, 0.6 * min(Wd[i], Hd[i]))
+        s.ellipsoid(Pd[i], (max(Wd[i], 0.05), r_along, max(Hd[i], 0.05)), xaxis=side, zhint=u, op=op,
+                    k=k if i else k_join)
+    return s
 
 
 def build_scene(ops, base_dir=None, s=None):
@@ -199,6 +236,9 @@ def build_scene(ops, base_dir=None, s=None):
                 D, lo, p = hull_grid(fm, sm, a["width"], a.get("pitch", 0.15), round_k=a.get("round", 0.0),
                                     soften=a.get("soften", 0.0))
                 s.grid_sdf(*_centre_grid(D, lo, p, a.get("at")), op=op, k=k)
+            elif kind == "loft":
+                loft(s, M(a["pts"]), a["w"], a["h"], up=a.get("up", (0, 0, 1)), step=a.get("step", 0.2), op=op,
+                     k=a.get("blend"), twist=a.get("twist", 0.0), k_join=k)
             elif kind == "group":
                 sub = build_scene(a["ops"], base_dir)
                 s.group(sub, [tuple(w) for w in a.get("warps", [])], op=op, k=k)

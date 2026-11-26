@@ -97,12 +97,12 @@ def remesh(job, out, log, **opts):
     import trimesh
     from scipy.ndimage import gaussian_filter
     from .part import Model
-    from .sdf import mesh_to_sdf, Scene
+    from .sdf import mesh_to_sdf, Scene, weld
     try:
         f = M.resolve(job["file"], job)
     except (KeyError, M.ModelError) as e:
         raise BadJob(str(e))
-    src = trimesh.load(f, force="mesh")
+    src = weld(trimesh.load(f, force="mesh"))
     if job.get("up", "z") == "y":
         src.apply_transform(trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0]))
     sc = float(job.get("scale", 1.0))
@@ -125,6 +125,10 @@ def remesh(job, out, log, **opts):
               checks=job.get("checks", {}))
     m.mesh("body", mesh, job.get("material", "brass"))
     res = _checks(m, log)
+    # the remesh must keep the form: a seam-split or leaky source can fill wrong and leave a scrap
+    ratio = float(mesh.area / max(src.area, 1e-9))
+    res["survived"] = {"area_ratio": round(ratio, 3), "floor": 0.6,
+                       "pass": bool(ratio >= 0.6 or job.get("offset") or job.get("smooth"))}
     outs = {"stl": X.stl(m, os.path.join(out, "stl")), "glb": X.glb(m, os.path.join(out, f"{m.name}.glb")),
             "preview": P.render(m, os.path.join(out, "preview.png"))}
     info = X.parts_json(m, os.path.join(out, "parts.json"), {"checks": res})
