@@ -31,6 +31,12 @@ def _mat(bpy, kind, color):
         bsdf.inputs["Base Color"].default_value = (*color, 1) if color else (0.6, 0.6, 0.6, 1)
         bsdf.inputs["Roughness"].default_value = 0.7
         return m
+    if kind == "wood":  # oiled / lacquered hardwood: the texture gives the grain, a thin coat gives the finish
+        bsdf.inputs["Base Color"].default_value = (*color, 1) if color else (0.35, 0.18, 0.1, 1)
+        bsdf.inputs["Roughness"].default_value = 0.5
+        bsdf.inputs["Coat Weight"].default_value = 0.35
+        bsdf.inputs["Coat Roughness"].default_value = 0.25
+        return m
     if kind == "metal":
         bsdf.inputs["Base Color"].default_value = (*color, 1) if color else (0.9, 0.75, 0.45, 1)
         bsdf.inputs["Metallic"].default_value = 1.0
@@ -186,12 +192,37 @@ def _add_mesh(bpy, it):
         tex = nt.nodes.new("ShaderNodeTexImage")
         tex.image = bpy.data.images.load(it["image"])
         tex.interpolation = "Cubic"
-        nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+        if it.get("tex_gamma"):  # deepen a photo texture shot under bright light
+            gm = nt.nodes.new("ShaderNodeGamma")
+            gm.inputs["Gamma"].default_value = float(it["tex_gamma"])
+            nt.links.new(tex.outputs["Color"], gm.inputs["Color"])
+            nt.links.new(gm.outputs["Color"], bsdf.inputs["Base Color"])
+        else:
+            nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
     if it.get("rim_color"):
         rim = _mat(bpy, it.get("mat", "clay"), it["rim_color"])
         rim.node_tree.nodes["Principled BSDF"].inputs["Coat Weight"].default_value = 0.25  # burnished edge
         ob.data.materials.append(rim)
+    if it.get("woodlib"):  # an external wood library's material (e.g. a hardwood skill's woodlib_bl.apply)
+        _woodlib(ob, it["woodlib"])
     return ob
+
+
+def _woodlib(ob, spec):
+    """spec: {"species", "cut", "grain", "finish", "seed", "sap"}; the library is found via $PHLASMA_WOODLIB
+    (the directory holding woodlib.py with blender/woodlib_bl.py under it). Replaces the part's material."""
+    import os
+    import sys
+    root = os.environ.get("PHLASMA_WOODLIB")
+    if not root:
+        raise RuntimeError("item asks for woodlib but PHLASMA_WOODLIB is not set")
+    for p in (root, os.path.join(root, "blender")):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+    import woodlib_bl as WB
+    spec = dict(spec)
+    sp = spec.pop("species")
+    WB.apply(ob, sp, **spec)
 
 
 def render_views(items, out_dir, views=("front", "back", "side", "34"), size=(1080, 1350), samples=96,
