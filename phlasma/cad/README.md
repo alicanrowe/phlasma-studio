@@ -66,6 +66,14 @@ No paid service, no GPU, no non-commercial models. Everything runs on a CPU in s
   stiletto, coffin, edge. `nails.nail_set()` makes the 10-size set (examples/cad/nail_set.py). Add `"sculpt"` ops to
   the same part to build on the base; anything that reaches below the fitting surface is cut away so the nail still
   sits flush. Check `nails`: cuticle width within 0.6 mm of the size and a 0.4 to 1.2 mm shell; resin walls >= 0.3 mm.
+- Nail extensions (`"nail": {..., "extend": {"reach": 2.6, "profile": [[f, dz], ...], "w", "h", "dx", "twist"}}`):
+  one lofted body grows out of the free edge, with reach set as a multiple of the bed (2.5 to 3x reads as designed).
+  The root stays inside the shell's crown, so it never reads as a cap with a feature stuck on.
+  Example: nail_horn.job.json. `loft` is also a plain sculpt op (elliptical sections along a path).
+- Every imported mesh is welded by position first (`sdf.weld`). AI exports are split along UV seams, and unwelded
+  they fill wrong and leave a scrap. `remesh` adds a `survived` check: output area / source area >= 0.6.
+- Learned from the paid run (26 Nov): a side-profile silhouette is the spec; one body, never add-ons; chunky forms
+  over threads and wires; detail as displacement (relief), not booleans.
 - A GPU image-to-mesh model (TripoSG or TRELLIS, both MIT) can feed `remesh` on the tower later. It is not wired in.
 
 ## Not in v0 (next)

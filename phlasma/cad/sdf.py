@@ -401,6 +401,15 @@ def field(P, a):
     raise ValueError(a["kind"])
 
 
+def weld(mesh):
+    """weld an imported mesh by position only. AI and game exports (Tripo GLBs among them) are split along UV and
+    normal seams; left split, the mesh is not watertight and a voxel inside/outside fill fails at random."""
+    mesh.merge_vertices(merge_tex=True, merge_norm=True)
+    mesh.update_faces(mesh.nondegenerate_faces())
+    mesh.remove_unreferenced_vertices()
+    return mesh
+
+
 def mesh_to_sdf(mesh, pitch, pad=3):
     """sampled signed distance of a (possibly leaky) mesh: voxelize, fill the inside, distance transform both ways.
     Closes pinholes and gaps under ~2 voxels, so a messy scan or AI mesh comes out as one watertight solid."""

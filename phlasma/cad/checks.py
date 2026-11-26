@@ -71,9 +71,10 @@ def ray_mesh(m, faces=40000):
         return m
 
 
-def wall_thickness(mesh, n=1500, seed=0):
+def wall_thickness(mesh, n=1500, seed=0, points=False):
+    """ray-sampled local thickness: from points on the surface, straight in along -normal to the far side.
+    points=True also returns where each sample was taken."""
     mesh = ray_mesh(mesh)
-    """ray-sampled local thickness: from points on the surface, straight in along -normal to the far side"""
     rng = np.random.default_rng(seed)
     pts, fi = mesh.sample(n, return_index=True, seed=int(rng.integers(1 << 30)))
     nrm = mesh.face_normals[fi]
@@ -85,7 +86,8 @@ def wall_thickness(mesh, n=1500, seed=0):
         dist = np.linalg.norm(loc - org[ri], axis=1)
         dist[dist < eps] = np.inf
         np.minimum.at(d, ri, dist)
-    return d[np.isfinite(d)]
+    ok = np.isfinite(d)
+    return (d[ok], pts[ok]) if points else d[ok]
 
 
 def walls(model, floor_mm=0.8, metals=("sterling", "silver", "brass", "bronze", "gold14k", "gold18k", "titanium", "steel")):

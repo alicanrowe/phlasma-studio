@@ -95,7 +95,7 @@ def from_json(job):
                     scene, meta["nail"] = nail_scene(ps["nail"])
                     sc.setdefault("voxel", ps["nail"].get("pitch", 0.06))
                 scene = build_scene(sc.get("ops", []), job.get("_job_dir"), s=scene)
-                if "nail" in ps and sc.get("ops"):
+                if "nail" in ps and (sc.get("ops") or ps["nail"].get("extend")):
                     from .nails import fit_cut
                     fit_cut(ps["nail"], scene)
                 mesh = scene.mesh(voxel=sc.get("voxel", 0.15), keep=sc.get("keep", "largest"))

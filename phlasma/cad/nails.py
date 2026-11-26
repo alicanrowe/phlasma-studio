@@ -134,15 +134,55 @@ def fit_cut(p, s, pad=6.0):
     zs = np.arange(lo[2] - pitch, hi[2] + pitch, pitch)
     X, Y = np.meshgrid(xs, ys, indexing="ij")
     zu = under_z(p, w, X, np.clip(Y, -pad, L + pad), L)
-    D = (zs[None, None, :] - zu[..., None]).astype(np.float32)    # < 0 below the fitting surface
+    # < 0 below the fitting surface, over the nail only: an extension past the free edge may curl down freely
+    D = np.maximum(zs[None, None, :] - zu[..., None], (Y - (L + 0.5))[..., None]).astype(np.float32)
     s.grid_sdf(D, np.array([xs[0], ys[0], zs[0]]), pitch, op=1)
     return s
+
+
+def extend(p, s, e):
+    """one lofted body growing out of the free edge (never a part stuck on). e = {"profile": [[f, dz], ...] side-view
+    centreline, f = 0..1 along the reach, dz mm up from the free edge; "reach": length as a multiple of the bed
+    (2.5..3 reads as designed, under 1.5 as a plain nail); "w", "h": half-width / half-height per point, mm;
+    "dx": sideways drift per point, mm; "twist": degrees in total; "blend": join radius into the shell}. The root half-width is capped at half the shell's half-width."""
+    from .sculpt import loft
+    p = {**DEFAULTS, **p}
+    pg, w, L = outline(p)
+    bed = p["bed"] or 0.95 * w
+    reach = float(e.get("reach", 2.5)) * bed
+    prof = np.asarray(e.get("profile", [[0, 0], [0.5, 0.6], [1, 0.2]]), float)
+    n = len(prof)
+    dx = np.broadcast_to(np.asarray(e.get("dx", 0.0), float), (n,))
+    y0 = L - min(2.0, 0.3 * L)                                  # start inside the shell, so the two are one body
+    z0 = float(under_z(p, w, np.array([0.0]), np.array([y0]), L)[0]) + p["thick"] / 2
+    pts = np.stack([dx, y0 + prof[:, 0] * (reach + L - y0), z0 + prof[:, 1]], 1)
+    hw = float(np.interp(y0, *_halfwidth_profile(pg, y0)))
+    W = np.array(e.get("w", np.linspace(max(hw * 0.5, 0.6), 0.3, n)), float)
+    H = np.array(e.get("h", np.linspace(p["thick"] * 0.9, 0.3, n)), float)
+    # a flat section wider than the C-curve's crown stands proud of the shell as "wings" (a cap with a feature on
+    # it): keep the root inside the crown and let the blend carry it into the shell
+    W[0] = min(W[0], 0.5 * hw)
+    loft(s, pts, W, H, up=(0, 0, 1), step=float(e.get("step", 0.2)), twist=float(e.get("twist", 0.0)),
+         k=e.get("smooth"), k_join=float(e.get("blend", 1.2)))
+    return s, {"reach_mm": round(reach, 2), "reach_x_bed": round(reach / bed, 2), "bed_mm": round(bed, 2)}
+
+
+def _halfwidth_profile(pg, y):
+    """(ys, half-widths) of the outline near y, for np.interp"""
+    from shapely.geometry import LineString
+    ys = np.array([y - 0.01, y + 0.01])
+    x0, _, x1, _ = pg.bounds
+    hws = [pg.intersection(LineString([(x0 - 1, yy), (x1 + 1, yy)])).length / 2 for yy in ys]
+    return ys, np.array(hws)
 
 
 def nail_scene(p, s=None):
     D, lo, pitch, meta = nail_grid(p)
     s = s or Scene()
     s.grid_sdf(D, lo, pitch)
+    if p.get("extend"):
+        _, em = extend(p, s, p["extend"])
+        meta.update(em)
     return s, meta
 
 
@@ -162,7 +202,7 @@ def nail_set(spec):
 
 def check(model):
     """fit and comfort of every part that carries nail meta: cuticle chord within 0.6 mm of the size width,
-    shell thickness (p50 of measured walls) 0.4..1.2 mm, never thicker than 2.5 mm under any brushwork"""
+    shell thickness over the bed (p50 of measured walls) 0.4..1.2 mm; extensions and brushwork are not counted"""
     from .checks import wall_thickness
     out, ok = {}, True
     for p in model.parts:
@@ -173,7 +213,8 @@ def check(model):
         V = m.vertices
         band = V[(V[:, 1] > 0.15 * nm["width_mm"]) & (V[:, 1] < 0.25 * nm["width_mm"])]
         chord = float(np.ptp(band[:, 0])) if len(band) else 0.0
-        d = wall_thickness(m)
+        d, at = wall_thickness(m, n=2500, points=True)
+        d = d[(at[:, 1] > 0.1 * nm["width_mm"]) & (at[:, 1] < 0.85 * nm["length_mm"])]   # the shell, not add-ons
         p50 = float(np.percentile(d, 50)) if len(d) else 0.0
         good = abs(chord - nm["width_mm"]) <= 0.6 and 0.4 <= p50 <= 1.2
         ok &= good
