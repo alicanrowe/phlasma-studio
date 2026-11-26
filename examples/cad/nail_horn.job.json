@@ -6,8 +6,8 @@
    "name": "nail",
    "nail": {
     "size": 4,
-    "shape": "square",
-    "ext": 1.5,
+    "shape": "almond",
+    "ext": 5.0,
     "pitch": 0.08,
     "extend": {
      "reach": 2.6,

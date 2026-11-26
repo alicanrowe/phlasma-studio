@@ -166,7 +166,7 @@ def extend(p, s, e):
     # it): keep the root inside the crown and let the blend carry it into the shell
     W[0] = min(W[0], 0.5 * hw)
     loft(s, pts, W, H, up=(0, 0, 1), step=float(e.get("step", 0.2)), twist=float(e.get("twist", 0.0)),
-         k=e.get("smooth"), k_join=float(e.get("blend", 1.2)))
+         k=e.get("smooth"), k_join=float(e.get("blend", 2.0)))
     return s, {"reach_mm": round(reach, 2), "reach_x_bed": round(reach / bed, 2), "bed_mm": round(bed, 2)}
 
 
@@ -203,9 +203,24 @@ def nail_set(spec):
     return out
 
 
+JOINT_MAX = 0.3
+
+
+def joint_step(V, L, reach, bin_mm=0.25, window=1.0):
+    """widest drop in plan width over any 1 mm, around where the shell ends: a square bed that stops and a
+    feature that carries on shows as a cliff here (alican, 26 Nov: "never a square/boxy bed block; no visible joint")"""
+    y = np.arange(0.45 * L, L + 0.4 * reach, bin_mm)
+    idx = np.digitize(V[:, 1], y)
+    w = np.array([np.ptp(V[idx == i, 0]) if np.any(idx == i) else 0.0 for i in range(1, len(y))])
+    k = max(int(round(window / bin_mm)), 1)
+    return float(max((w[:-k] - w[k:]).max(initial=0.0), 0.0))
+
+
 def check(model):
     """fit and comfort of every part that carries nail meta: cuticle chord within 0.6 mm of the size width,
-    shell thickness over the bed (p50 of measured walls) 0.4..1.2 mm; extensions and brushwork are not counted"""
+    shell thickness over the bed (p50 of measured walls) 0.4..1.2 mm; extensions and brushwork are not counted.
+    With an extension: joint_step, the plan width lost over any 1 mm near the shell's end, as a fraction of the nail
+    width, must be <= 0.3 (no square bed block with a feature carrying on past a hard step)."""
     from .checks import wall_thickness
     out, ok = {}, True
     for p in model.parts:
@@ -220,7 +235,11 @@ def check(model):
         d = d[(at[:, 1] > 0.1 * nm["width_mm"]) & (at[:, 1] < 0.85 * nm["length_mm"])]   # the shell, not add-ons
         p50 = float(np.percentile(d, 50)) if len(d) else 0.0
         good = abs(chord - nm["width_mm"]) <= 0.6 and 0.4 <= p50 <= 1.2
+        row = {"width_mm": nm["width_mm"], "measured_width_mm": round(chord, 2), "wall_p50_mm": round(p50, 3)}
+        if nm.get("reach_mm"):
+            step = joint_step(V, nm["length_mm"], nm["reach_mm"])
+            row["joint_step"] = round(step / nm["width_mm"], 3)
+            good &= row["joint_step"] <= JOINT_MAX
         ok &= good
-        out[p.name] = {"width_mm": nm["width_mm"], "measured_width_mm": round(chord, 2),
-                       "wall_p50_mm": round(p50, 3), "pass": bool(good)}
+        out[p.name] = {**row, "pass": bool(good)}
     return {"pass": bool(ok), "parts": out}
