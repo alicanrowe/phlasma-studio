@@ -7,3 +7,6 @@ jobs/
 results/
 *.npz
 .venv/
+*.egg-info/
+build/
+__pycache__/

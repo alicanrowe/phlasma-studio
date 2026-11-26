@@ -1,2 +1,0 @@
-[console_scripts]
-phlasma = phlasma.core.cli:main
