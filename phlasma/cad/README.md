@@ -28,7 +28,7 @@ bodies (one closed body per part), interference (exact overlap volume, contact f
 walls (cast metal: 5th-percentile thickness >= 0.8 mm), laser (fits the xTool bed grain-true, no bar thinner than
 the sheet), stones (stock size, held round the girdle, seated), ring_size (measured hole = asked size +-0.1 mm),
 stands (furniture rests with its centre of mass inside its contacts). tests/test_cad.py plants one mistake per
-check and must catch all of them.
+check and must catch all of them. nails (fit and shell, for nail parts).
 
 ## Examples (examples/cad/)
 - finger_box.py: a finger-jointed laser box from 1/4 in sheet; 5 plates, one nested sheet with kerf, blue inner /
@@ -39,6 +39,8 @@ check and must catch all of them.
 - stool.py: a four-leg stool in solid white oak: legs and aprons as sticks, blind mortise and tenon at every
   corner (joinery.py), top resting on the aprons; cut list with rough blanks (tenons included in the length).
 - solitaire.job.json: a bezel solitaire in pure JSON, no Python.
+- nail_set.py: a 10-size press-on set on one print plate. nail_sculpt.job.json: a stiletto base with a swept horn,
+  two beads and growth bands, all JSON.
 
 ## Joinery, CNC and cut lists (v0.2)
 - `joinery.stick()` + `joinery.mortise_tenon()`: tenon on the rail, mortise (fit + bottom clearance) in the post,
@@ -48,6 +50,23 @@ check and must catch all of them.
   `cut_cnc/`, and a check that no slot, notch or hole is narrower than the bit.
 - `build/cutlist.csv|json` for furniture: identical parts grouped, finished L x W x T along the grain, shop
   fractions, rough blanks (+1 in long, +1/4 in wide, 12 in minimum for solid sticks).
+
+## Sculpting: our own image-to-3D, nails, remesh (v0.3)
+No paid service, no GPU, no non-commercial models. Everything runs on a CPU in seconds to a minute.
+- JSON brush scenes (`"sculpt": {"voxel", "ops"}`, see sculpt.py): blob, ball, stroke (radius per point), ring,
+  cone, box, mesh, group with twist/bend/taper warps, relief (noise or growth bands); every op can add, cut or
+  intersect, blend with `k`, and mirror.
+- Concept image to 3D: `inflate` blows a drawn or photographed silhouette up into a pillow (Poisson height field, so
+  no ridge down the middle and no voxel steps); `hull` intersects a front and a side silhouette (true volume to
+  within 0.5% on a test shape). Background removal is our own (backdrop colour + saturation, largest blob).
+- `cad remesh`: any STL/GLB/OBJ (a scan, an AI model, an old file) becomes one watertight body at true size, with
+  optional grow/shrink and smoothing, then the usual checks. A 1.9M-face open AI mesh takes about 20 s.
+- Press-on nails (nails.py): `"nail": {size 0..9 | width, shape, ext, thick, c_curve, arch}` is a shell on a real
+  fitting surface (C-curve across, arch along, thin at the cuticle). Shapes: square, squoval, round, oval, almond,
+  stiletto, coffin, edge. `nails.nail_set()` makes the 10-size set (examples/cad/nail_set.py). Add `"sculpt"` ops to
+  the same part to build on the base; anything that reaches below the fitting surface is cut away so the nail still
+  sits flush. Check `nails`: cuticle width within 0.6 mm of the size and a 0.4 to 1.2 mm shell; resin walls >= 0.3 mm.
+- A GPU image-to-mesh model (TripoSG or TRELLIS, both MIT) can feed `remesh` on the tower later. It is not wired in.
 
 ## Not in v0 (next)
 Sketch constraints, the furniture skill's wood-movement rules (cross-grain glue, panel room), drawings, faceted stone

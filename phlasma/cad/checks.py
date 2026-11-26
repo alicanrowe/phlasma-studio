@@ -255,6 +255,12 @@ def run_all(model, opts):
     res = {"bodies": bodies(model), "interference": interference(model)}
     if model.kind == "jewelry" or chk.get("walls"):
         res["walls"] = walls(model, floor_mm=chk.get("wall_floor_mm", 0.8))
+    if any(p.meta.get("nail") for p in model.parts):
+        from .nails import check as nail_check
+        res["nails"] = nail_check(model)
+        rw = walls(model, floor_mm=chk.get("resin_floor_mm", 0.3), metals=("resin", "abs"))
+        res.setdefault("walls", {"pass": True, "parts": {}})
+        res["walls"]["parts"].update(rw["parts"]); res["walls"]["pass"] = bool(res["walls"]["pass"] and rw["pass"])
     if any(p.kind == "plate" for p in model.parts):
         res["laser"] = laser(model)
     cn = model.meta.get("cnc") or (model.sheet or {}).get("cnc")

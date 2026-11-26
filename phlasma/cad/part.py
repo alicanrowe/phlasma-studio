@@ -21,7 +21,7 @@ DENSITY = {
     "titanium": 4.5, "steel": 7.85, "stainless": 8.0, "aluminium": 2.7,
     "walnut": 0.61, "white_oak": 0.75, "red_oak": 0.70, "maple": 0.70, "cherry": 0.56, "ash": 0.67,
     "mahogany": 0.55, "cedar": 0.38, "birch_ply": 0.68,
-    "acrylic": 1.19, "gfrc": 2.2, "leather": 0.86,
+    "acrylic": 1.19, "resin": 1.15, "abs": 1.05, "gfrc": 2.2, "leather": 0.86,
     "diamond": 3.52, "sapphire": 4.0, "ruby": 4.0, "tourmaline": 3.1, "pinktourmaline": 3.1, "garnet": 3.9,
     "amethyst": 2.65, "topaz": 3.55, "cz": 5.8, "enamel": 2.5,
 }
@@ -29,7 +29,7 @@ COLOR = {  # preview / GLB base colours (sRGB)
     "sterling": (0.80, 0.80, 0.82), "silver": (0.82, 0.82, 0.84), "brass": (0.80, 0.66, 0.36),
     "steel": (0.55, 0.56, 0.58), "stainless": (0.62, 0.63, 0.65), "titanium": (0.55, 0.55, 0.57),
     "walnut": (0.42, 0.28, 0.19), "white_oak": (0.74, 0.60, 0.43), "maple": (0.86, 0.76, 0.60),
-    "cherry": (0.62, 0.38, 0.25), "ash": (0.80, 0.70, 0.55), "acrylic": (0.85, 0.92, 0.95),
+    "cherry": (0.62, 0.38, 0.25), "ash": (0.80, 0.70, 0.55), "acrylic": (0.85, 0.92, 0.95), "resin": (0.96, 0.93, 0.90),
     "pinktourmaline": (0.93, 0.35, 0.60), "ruby": (0.75, 0.05, 0.15), "diamond": (0.95, 0.97, 1.0),
     "sapphire": (0.15, 0.25, 0.75), "enamel_pink": (0.98, 0.45, 0.70), "enamel_lilac": (0.72, 0.60, 0.95),
 }
